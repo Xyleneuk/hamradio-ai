@@ -1,0 +1,5 @@
+# Build outputs - too large for GitHub
+dist/
+build/
+*.wav
+*.adi
