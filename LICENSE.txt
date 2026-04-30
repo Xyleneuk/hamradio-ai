@@ -1,0 +1,21 @@
+Ham Radio AI - License Agreement
+
+Copyright (c) 2026 HamRadioAI / MX0MXO
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software to use it for amateur radio purposes, subject
+to the following conditions:
+
+1. You must hold a valid amateur radio licence to use the transmit 
+   features of this software.
+
+2. You are responsible for ensuring all transmissions comply with your
+   licence conditions and local regulations.
+
+3. A licensed operator must be present and in control at all times
+   when this software is used to transmit.
+
+4. The authors accept no liability for any unlicensed transmissions
+   or regulatory violations.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
