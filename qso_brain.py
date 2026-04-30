@@ -3,38 +3,24 @@ import json
 
 client = anthropic.Anthropic()
 
-SYSTEM_PROMPT = """You are an experienced amateur radio operator working for the club station MX0MXO 
-located in the United Kingdom. Your name is James and your QTH is London Heathrow.
+SYSTEM_PROMPT = """You are operating amateur radio station MX0MXO in the UK.
+Operator name: James, QTH: London Heathrow.
 
-CALLSIGN RULES - CRITICAL:
-- When calling CQ: always use full phonetics for MX0MXO 
-  e.g. "Mike X-ray Zero Mike X-ray Oscar"
-- In ALL other transmissions: use letters only - just say "MX0MXO"
-- For other stations callsigns: use phonetics ONCE on first contact only,
-  then use letters only for the rest of the QSO
+CALLSIGN RULES:
+- CQ only: use full phonetics "Mike X-ray Zero Mike X-ray Oscar"
+- All other TX: letters only "MX0MXO"
+- Other stations: phonetics first time only, then letters
 
-QSO STYLE:
-- Keep transmissions SHORT and PUNCHY
-- One or two sentences maximum per transmission
-- Get the key info quickly: callsign, RST, name, QTH
-- Be friendly but efficient
-- Always end with "over" when expecting a reply
-- End QSO with "73, MX0MXO clear" or similar short farewell
+STYLE:
+- SHORT and PUNCHY - one sentence where possible
+- Get callsign, RST, name, QTH quickly
+- Say 73 before ending, then log_and_end
+- No need to repeat MX0MXO at end of every transmission
 
-BEHAVIOUR:
-- Follow correct amateur radio QSO procedure
-- Give RST signal reports for SSB e.g. 59, 57, 55
-- Share your name (James) and QTH (London Heathrow) when appropriate
-- ALWAYS say 73 before ending any contact
-- When other station says 73, respond with a short 73 farewell THEN use log_and_end
-- Only use log_and_end AFTER you have transmitted your farewell
-
-CRITICAL RESPONSE FORMAT:
-Respond ONLY with a single valid JSON object. Raw JSON only:
-
+RESPONSE FORMAT - raw JSON only:
 {
   "action": "transmit",
-  "speech": "what to say on air - SHORT and PUNCHY",
+  "speech": "what to say",
   "qso_data": {
     "callsign": null,
     "rst_sent": null,
@@ -44,59 +30,46 @@ Respond ONLY with a single valid JSON object. Raw JSON only:
     "complete": false
   }
 }
+action: transmit | listen | log_and_end"""
 
-action values:
-- "transmit" - say something then listen
-- "listen"   - say something then wait
-- "log_and_end" - QSO complete, farewell already sent, log it"""
+CONTEST_SYSTEM_PROMPT = """You are operating MX0MXO in a contest.
+Exchange: RST + serial number.
 
-CONTEST_SYSTEM_PROMPT = """You are operating amateur radio station MX0MXO in a contest.
-Contest exchange is: RST + serial number.
-Our current serial number will be provided.
-
-Rules:
-- Keep ALL transmissions very short and fast
+RULES:
+- Extremely fast and brief
 - CQ: "CQ contest MX0MXO MX0MXO"
-- When station calls: confirm callsign, send RST and our serial immediately
-- Example: "G4ABC thanks, 59 001, you are in the log, MX0MXO"
-- Use letters not phonetics except MX0MXO on CQ
-- Log and end immediately after sending our exchange
+- When they call with their exchange e.g. "59 023":
+  Reply MUST confirm THEIR serial and give OUR serial
+  Example: "G4ABC 59 023 confirmed, you are 59 102, MX0MXO"
+- One transmission then log_and_end
+- Letters only except MX0MXO on CQ
 
-Respond ONLY with raw JSON:
+RESPONSE FORMAT - raw JSON only:
 {
-  "action": "transmit",
+  "action": "log_and_end",
   "speech": "exactly what to say",
   "qso_data": {
     "callsign": null,
-    "rst_sent": null,
+    "rst_sent": "59",
     "rst_rcvd": null,
+    "serial_sent": null,
     "serial_rcvd": null,
     "complete": false
   }
-}
-action: transmit | log_and_end"""
+}"""
 
-REPEATER_SYSTEM_PROMPT = """You are an automated amateur radio information repeater/node.
-You provide helpful information to amateur radio operators who call in.
+REPEATER_SYSTEM_PROMPT = """You are automated repeater/info node. Callsign will be provided.
 
-Your personality:
-- Friendly, helpful and concise
-- Always identify with the repeater callsign at the start and end
-- Keep responses SHORT - this is radio, not a conversation
-- Speak naturally as if on radio - no bullet points or lists
+RULES:
+- Start with "This is [callsign]"
+- End with "[callsign]"  
+- Very short responses - this is radio
+- Use EXACT time/weather data provided - never guess
 
-You can provide:
-- Time and date (always use the EXACT time provided - never guess)
-- Local weather (use the weather data provided exactly)
-- News headlines (use the headlines provided)
-- General amateur radio information
-
-Try to identify the caller's callsign from their transmission.
-
-Respond ONLY with raw JSON:
+RESPONSE FORMAT - raw JSON only:
 {
-  "speech": "what to say on air",
-  "callsign": "caller callsign if identified or null",
+  "speech": "what to say",
+  "callsign": "caller callsign or null",
   "request_type": "time|weather|news|general|unknown"
 }"""
 
@@ -130,7 +103,7 @@ class QSOBrain:
     def _call_claude(self, messages, system=None):
         response = client.messages.create(
             model='claude-sonnet-4-6',
-            max_tokens=300,
+            max_tokens=200,
             system=system or SYSTEM_PROMPT,
             messages=messages
         )
@@ -145,8 +118,7 @@ class QSOBrain:
                 parsed['qso_data'] = self.qso_data.copy()
             return parsed
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"JSON parse error: {e}")
-            print(f"Raw response: {raw}")
+            print(f"JSON parse error: {e}\nRaw: {raw}")
             return {
                 'action':   'listen',
                 'speech':   '',
@@ -158,15 +130,14 @@ class QSOBrain:
         messages = [{
             'role':    'user',
             'content': (
-                f"Call CQ on {frequency_mhz:.4f} MHz ({band} band). "
-                f"Short CQ - maximum 2 CQ calls. End with MX0MXO over."
+                f"Call CQ on {frequency_mhz:.4f} MHz ({band}). "
+                f"Two CQ calls max. Short."
             )
         }]
         result = self._call_claude(messages)
         self.conversation_history.append(messages[0])
         self.conversation_history.append({
-            'role':    'assistant',
-            'content': json.dumps(result)
+            'role': 'assistant', 'content': json.dumps(result)
         })
         return result
 
@@ -175,15 +146,13 @@ class QSOBrain:
             'role':    'user',
             'content': (
                 f"Received: \"{transcribed_text}\"\n"
-                f"QSO data so far: {json.dumps(self.qso_data)}\n"
-                f"Respond - keep it short. "
-                f"Use log_and_end only after you have said 73."
+                f"Data so far: {json.dumps(self.qso_data)}\n"
+                f"Keep it short. log_and_end only after saying 73."
             )
         })
         result = self._call_claude(self.conversation_history)
         self.conversation_history.append({
-            'role':    'assistant',
-            'content': json.dumps(result)
+            'role': 'assistant', 'content': json.dumps(result)
         })
         return result
 
@@ -193,10 +162,13 @@ class QSOBrain:
             'content': (
                 f"Received: \"{transcribed_text}\"\n"
                 f"Our serial to send: {serial_number:03d}\n"
-                f"Respond fast."
+                f"Confirm their serial, give ours, log_and_end."
             )
         }]
         result = self._call_claude(messages, system=CONTEST_SYSTEM_PROMPT)
+        # Store serial numbers
+        if 'qso_data' in result:
+            result['qso_data']['serial_sent'] = f"{serial_number:03d}"
         return result
 
     def process_repeater_query(self, transcribed_text, callsign):
@@ -212,22 +184,15 @@ class QSOBrain:
             news_data = get_news()
 
         context = (
-            f"Repeater callsign: {callsign}\n"
-            f"Caller transmission: \"{transcribed_text}\"\n"
-            f"\nACCURATE CURRENT TIME - use exactly as given:\n"
-            f"  UTC:      {utc_time['spoken']}\n"
-            f"  Local UK: {local_time['spoken']}\n"
-            f"\nCurrent weather near repeater:\n"
-            f"  {weather['spoken']}\n"
+            f"You are repeater {callsign}\n"
+            f"Caller said: \"{transcribed_text}\"\n"
+            f"UTC time: {utc_time['spoken']}\n"
+            f"Local UK: {local_time['spoken']}\n"
+            f"Weather: {weather['spoken']}\n"
         )
         if news_data:
-            context += f"\nLatest news:\n  {news_data['spoken']}\n"
-        context += (
-            f"\nRespond to the caller's request using only the data "
-            f"provided above. Identify any callsign in their "
-            f"transmission. Keep response short and radio-friendly. "
-            f"Sign off with {callsign}."
-        )
+            context += f"News: {news_data['spoken']}\n"
+        context += "Respond briefly. Start and end with callsign."
 
         messages = [{'role': 'user', 'content': context}]
         return self._call_claude(messages, system=REPEATER_SYSTEM_PROMPT)

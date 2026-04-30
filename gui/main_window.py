@@ -7,7 +7,7 @@ import pyaudio
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox,
-    QStatusBar, QSplitter, QMessageBox
+    QStatusBar, QSplitter, QMessageBox, QTabWidget
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QTextCursor, QAction
@@ -55,8 +55,9 @@ class ActivityLog(QTextEdit):
 
 class QSOLogWidget(QTextEdit):
     HEADER = (
-        f"{'DATE':<9} {'UTC':<6} {'CALLSIGN':<12} {'BAND':<6} "
-        f"{'RST S':<7} {'RST R':<7} {'NAME':<12} {'QTH'}"
+        f"{'DATE':<9} {'UTC':<6} {'CALL':<10} {'BAND':<5} "
+        f"{'FREQ':<10} {'RS':<5} {'RR':<5} {'SS':<5} {'SR':<5} "
+        f"{'NAME':<10} {'QTH'}"
     )
 
     def __init__(self):
@@ -77,29 +78,37 @@ class QSOLogWidget(QTextEdit):
         self.setTextColor(QColor('#4488ff'))
         self.append(self.HEADER)
         self.setTextColor(QColor('#333366'))
-        self.append('-' * 80)
+        self.append('-' * 85)
 
     def add_qso(self, qso_data):
         from datetime import datetime, timezone
         now      = datetime.now(timezone.utc)
         date_str = now.strftime('%d/%m/%y')
         time_str = now.strftime('%H%MZ')
-        self._write_row(
-            date_str,
-            time_str,
-            qso_data.get('callsign', '?'),
-            qso_data.get('band', '?'),
-            qso_data.get('rst_sent', '59'),
-            qso_data.get('rst_rcvd', '59'),
-            qso_data.get('name', ''),
-            qso_data.get('qth', '')
-        )
+        self._write_row(date_str, time_str, qso_data)
 
-    def _write_row(self, date, utc, callsign, band, rst_s, rst_r, name, qth):
+    def _write_row(self, date, utc, q):
+        callsign = str(q.get('callsign')    or '?')
+        band     = str(q.get('band')        or '?')
+        freq     = str(q.get('frequency')   or '')
+        rst_s    = str(q.get('rst_sent')    or '59')
+        rst_r    = str(q.get('rst_rcvd')    or '59')
+        ser_s    = str(q.get('serial_sent') or '')
+        ser_r    = str(q.get('serial_rcvd') or '')
+        name     = str(q.get('name')        or '')
+        qth      = str(q.get('qth')         or '')
+
+        # Format frequency nicely
+        try:
+            freq = f"{float(freq):.4f}"
+        except Exception:
+            pass
+
         self.setTextColor(QColor('#00ff88'))
         self.append(
-            f"{date:<9} {utc:<6} {callsign:<12} {band:<6} "
-            f"{rst_s:<7} {rst_r:<7} {name:<12} {qth}"
+            f"{date:<9} {utc:<6} {callsign:<10} {band:<5} "
+            f"{freq:<10} {rst_s:<5} {rst_r:<5} {ser_s:<5} {ser_r:<5} "
+            f"{name:<10} {qth}"
         )
         self.moveCursor(QTextCursor.MoveOperation.End)
 
@@ -110,7 +119,7 @@ class QSOLogWidget(QTextEdit):
             if not qsos:
                 return
             self.setTextColor(QColor('#555555'))
-            self.append(f"  --- {len(qsos)} previous QSOs loaded ---")
+            self.append(f"  --- {len(qsos)} previous QSOs ---")
             for q in qsos:
                 raw_date = q.get('date', '')
                 try:
@@ -122,33 +131,65 @@ class QSOLogWidget(QTextEdit):
                 except Exception:
                     date_str = raw_date
                 time_str = q.get('time', '') + 'Z'
-                self._write_row(
-                    date_str,
-                    time_str,
-                    q.get('callsign', '?'),
-                    q.get('band', '?'),
-                    q.get('rst_sent', '59'),
-                    q.get('rst_rcvd', '59'),
-                    q.get('name', ''),
-                    q.get('qth', '')
-                )
+                self._write_row(date_str, time_str, q)
             self.setTextColor(QColor('#333366'))
-            self.append('-' * 80)
+            self.append('-' * 85)
             self.moveCursor(QTextCursor.MoveOperation.End)
         except Exception as e:
-            print(f"Could not load ADIF log: {e}")
+            print(f"Could not load ADIF: {e}")
+
+
+class RepeaterLogWidget(QTextEdit):
+    HEADER = (
+        f"{'DATE':<9} {'UTC':<6} {'CALLSIGN':<12} "
+        f"{'FREQ':<10} {'REQUEST':<10} {'HEARD'}"
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setFont(QFont('Courier New', 9))
+        self.setStyleSheet("""
+            QTextEdit {
+                background-color: #0a1a0a;
+                color: #cccccc;
+                border: 1px solid #333;
+                padding: 4px;
+            }
+        """)
+        self.setTextColor(QColor('#44bb44'))
+        self.append(self.HEADER)
+        self.setTextColor(QColor('#336633'))
+        self.append('-' * 80)
+
+    def add_contact(self, callsign, freq_mhz, request_type, heard):
+        from datetime import datetime, timezone
+        now      = datetime.now(timezone.utc)
+        date_str = now.strftime('%d/%m/%y')
+        time_str = now.strftime('%H%MZ')
+        callsign = str(callsign or 'UNKNOWN')
+        freq     = f"{freq_mhz:.4f}" if freq_mhz else '?'
+        req      = str(request_type or 'unknown')
+        text     = str(heard or '')[:40]
+        self.setTextColor(QColor('#88ff88'))
+        self.append(
+            f"{date_str:<9} {time_str:<6} {callsign:<12} "
+            f"{freq:<10} {req:<10} {text}"
+        )
+        self.moveCursor(QTextCursor.MoveOperation.End)
 
 
 class RadioWorker(QThread):
-    log_tx      = pyqtSignal(str)
-    log_rx      = pyqtSignal(str)
-    log_info    = pyqtSignal(str)
-    log_success = pyqtSignal(str)
-    log_error   = pyqtSignal(str)
-    log_warning = pyqtSignal(str)
-    qso_logged  = pyqtSignal(dict)
-    status_msg  = pyqtSignal(str)
-    frequency   = pyqtSignal(float)
+    log_tx           = pyqtSignal(str)
+    log_rx           = pyqtSignal(str)
+    log_info         = pyqtSignal(str)
+    log_success      = pyqtSignal(str)
+    log_error        = pyqtSignal(str)
+    log_warning      = pyqtSignal(str)
+    qso_logged       = pyqtSignal(dict)
+    repeater_contact = pyqtSignal(str, float, str, str)  # call, freq, type, heard
+    status_msg       = pyqtSignal(str)
+    frequency        = pyqtSignal(float)
 
     def __init__(self, config, personality):
         super().__init__()
@@ -191,7 +232,7 @@ class RadioWorker(QThread):
             f"Audio config: input={input_dev} output={output_dev}"
         )
 
-        self.log_info.emit("Loading Whisper speech recognition...")
+        self.log_info.emit("Loading Whisper...")
         transcriber = whisper.load_model('base')
 
         self.log_info.emit("Connecting to radio...")
@@ -202,15 +243,9 @@ class RadioWorker(QThread):
             input_device=input_dev,
             output_device=output_dev
         )
-        self.log_info.emit(
-            f"AudioHandler: input={audio.input_device} "
-            f"output={audio.output_device} "
-            f"sd_output={audio.sd_output}"
-        )
 
         tts   = TTSHandler()
         brain = QSOBrain()
-
         brain.our_callsign  = self.config.get('callsign', 'NOCALL')
         brain.operator_name = self.config.get('operator_name', '')
         brain.qth           = self.config.get('qth', '')
@@ -223,14 +258,10 @@ class RadioWorker(QThread):
         freq_mhz = freq / 1e6
         self.frequency.emit(freq_mhz)
         self.status_msg.emit(
-            f"Operating on {freq_mhz:.4f} MHz  |  "
-            f"Personality: {self.personality}"
+            f"Operating on {freq_mhz:.4f} MHz  |  {self.personality}"
         )
         self.log_success.emit("All systems ready!")
 
-        # ------------------------------------------------------------------
-        # Helper: refresh frequency
-        # ------------------------------------------------------------------
         def refresh_frequency():
             try:
                 f = self.radio.get_frequency() / 1e6
@@ -239,9 +270,6 @@ class RadioWorker(QThread):
             except Exception:
                 return freq_mhz
 
-        # ------------------------------------------------------------------
-        # Helper: transmit - PTT ALWAYS released via finally
-        # ------------------------------------------------------------------
         def transmit(text):
             self.log_tx.emit(text)
             try:
@@ -260,13 +288,8 @@ class RadioWorker(QThread):
                 try:
                     self.radio.set_ptt(0)
                 except Exception as e:
-                    self.log_error.emit(
-                        f"CRITICAL: PTT release failed: {e}"
-                    )
+                    self.log_error.emit(f"CRITICAL: PTT release failed: {e}")
 
-        # ------------------------------------------------------------------
-        # Helper: listen for signal
-        # ------------------------------------------------------------------
         def listen_for_signal(timeout):
             start = time.time()
             while time.time() - start < timeout:
@@ -277,9 +300,6 @@ class RadioWorker(QThread):
                     return True
             return False
 
-        # ------------------------------------------------------------------
-        # Helper: record and transcribe
-        # ------------------------------------------------------------------
         def record_and_transcribe():
             p      = pyaudio.PyAudio()
             stream = p.open(
@@ -293,7 +313,8 @@ class RadioWorker(QThread):
             recording     = []
             silence_count = 0
             frames_above  = 0
-            silence_limit = int(8000 / 1024 * 2)
+            # Reduced silence limit to 0.8s for faster response
+            silence_limit = int(8000 / 1024 * 0.8)
             max_chunks    = int(8000 / 1024 * 30)
 
             for _ in range(max_chunks):
@@ -309,7 +330,7 @@ class RadioWorker(QThread):
                     silence_count  = 0
                 else:
                     silence_count += 1
-                    if silence_count > silence_limit and frames_above > 10:
+                    if silence_count > silence_limit and frames_above > 5:
                         break
 
             stream.stop_stream()
@@ -330,9 +351,6 @@ class RadioWorker(QThread):
             self.log_rx.emit(text)
             return text
 
-        # ------------------------------------------------------------------
-        # Helper: finish and log a QSO
-        # ------------------------------------------------------------------
         def finish_qso(current_freq_mhz):
             qso = brain.qso_data.copy()
             qso['band']      = brain._get_band(current_freq_mhz)
@@ -342,16 +360,12 @@ class RadioWorker(QThread):
                 self.log_success.emit(
                     f"QSO logged: {qso['callsign']}  "
                     f"RST {qso.get('rst_sent','?')}/"
-                    f"{qso.get('rst_rcvd','?')}"
+                    f"{qso.get('rst_rcvd','?')}  "
+                    f"{current_freq_mhz:.4f} MHz"
                 )
             else:
-                self.log_warning.emit(
-                    "QSO ended but no callsign captured - not logged"
-                )
+                self.log_warning.emit("QSO ended - no callsign captured")
 
-        # ------------------------------------------------------------------
-        # Run selected personality
-        # ------------------------------------------------------------------
         if self.personality == 'General QSO':
             self._run_general_qso(
                 brain, transmit, listen_for_signal,
@@ -374,20 +388,16 @@ class RadioWorker(QThread):
         self.radio.disconnect()
         audio.close()
 
-    # ------------------------------------------------------------------
-    # General QSO personality
-    # ------------------------------------------------------------------
     def _run_general_qso(
         self, brain, transmit, listen_for_signal,
         record_and_transcribe, finish_qso,
         refresh_frequency, freq_mhz, listen_timeout
     ):
         cq_attempts = 0
-
         while self.running:
             freq_mhz = refresh_frequency()
             brain.reset()
-            self.log_info.emit("Generating CQ call...")
+            self.log_info.emit("Generating CQ...")
             result = brain.get_cq_call(freq_mhz)
             transmit(result['speech'])
             cq_attempts += 1
@@ -396,56 +406,43 @@ class RadioWorker(QThread):
                 heard = record_and_transcribe()
                 if heard:
                     response = brain.process_received_transmission(heard)
-
-                    while (self.running and
-                           response['action'] != 'log_and_end'):
+                    while self.running and response['action'] != 'log_and_end':
                         transmit(response['speech'])
                         if listen_for_signal(listen_timeout):
                             heard    = record_and_transcribe()
-                            response = brain.process_received_transmission(
-                                heard
-                            )
+                            response = brain.process_received_transmission(heard)
                         else:
                             self.log_warning.emit("No reply - ending QSO")
                             break
-
                     if response['action'] == 'log_and_end':
                         transmit(response['speech'])
-
                     freq_mhz = refresh_frequency()
                     finish_qso(freq_mhz)
                     cq_attempts = 0
             else:
-                self.log_info.emit(f"No reply to CQ ({cq_attempts}/3)")
+                self.log_info.emit(f"No reply ({cq_attempts}/3)")
                 if cq_attempts >= 3:
-                    self.log_info.emit("No responses - pausing 60 seconds")
+                    self.log_info.emit("Pausing 60 seconds")
                     for _ in range(60):
                         if not self.running:
                             break
                         time.sleep(1)
                     cq_attempts = 0
 
-    # ------------------------------------------------------------------
-    # Contest personality
-    # ------------------------------------------------------------------
     def _run_contest(
         self, brain, transmit, listen_for_signal,
         record_and_transcribe, finish_qso,
         refresh_frequency, freq_mhz, listen_timeout
     ):
-        serial       = 1
-        contest_name = self.config.get('contest_name', 'Contest')
-        cq_attempts  = 0
-        self.log_info.emit(f"Contest mode: {contest_name}")
+        serial      = 1
+        cq_attempts = 0
+        contest     = self.config.get('contest_name', 'Contest')
+        self.log_info.emit(f"Contest: {contest} - starting serial {serial:03d}")
 
         while self.running:
             freq_mhz = refresh_frequency()
             brain.reset()
-            cq_text = (
-                f"CQ {contest_name}, "
-                f"{brain.our_callsign} {brain.our_callsign}"
-            )
-            transmit(cq_text)
+            transmit(f"CQ {contest} MX0MXO MX0MXO")
             cq_attempts += 1
 
             if listen_for_signal(listen_timeout):
@@ -454,38 +451,31 @@ class RadioWorker(QThread):
                     response = brain.process_contest_exchange(heard, serial)
                     transmit(response['speech'])
 
-                    if listen_for_signal(listen_timeout):
-                        heard    = record_and_transcribe()
-                        response = brain.process_contest_exchange(
-                            heard, serial
-                        )
-                        freq_mhz = refresh_frequency()
-                        qso = brain.qso_data.copy()
-                        qso['band']        = brain._get_band(freq_mhz)
-                        qso['frequency']   = freq_mhz
-                        qso['serial_sent'] = str(serial)
+                    qso = brain.qso_data.copy()
+                    qso['band']        = brain._get_band(freq_mhz)
+                    qso['frequency']   = freq_mhz
+                    qso['serial_sent'] = f"{serial:03d}"
+
+                    if qso.get('callsign'):
                         serial += 1
-                        if qso.get('callsign'):
-                            self.qso_logged.emit(qso)
-                            self.log_success.emit(
-                                f"Contest QSO #{serial-1}: "
-                                f"{qso['callsign']}  "
-                                f"Serial: {qso['serial_sent']} / "
-                                f"{qso.get('serial_rcvd','?')}"
-                            )
+                        self.qso_logged.emit(qso)
+                        self.log_success.emit(
+                            f"Contest QSO #{serial-1}: "
+                            f"{qso['callsign']}  "
+                            f"Sent:{qso['serial_sent']}  "
+                            f"Rcvd:{qso.get('serial_rcvd','?')}  "
+                            f"{freq_mhz:.4f} MHz"
+                        )
                     cq_attempts = 0
             else:
                 if cq_attempts >= 5:
-                    self.log_info.emit("No responses - pausing 30 seconds")
+                    self.log_info.emit("No responses - pausing 30s")
                     for _ in range(30):
                         if not self.running:
                             break
                         time.sleep(1)
                     cq_attempts = 0
 
-    # ------------------------------------------------------------------
-    # Repeater / info node personality
-    # ------------------------------------------------------------------
     def _run_repeater(
         self, brain, transmit, listen_for_signal,
         record_and_transcribe, refresh_frequency,
@@ -497,39 +487,35 @@ class RadioWorker(QThread):
             'repeater_callsign',
             self.config.get('callsign', 'NOCALL')
         )
-        # Fixed 60 minute beacon interval
         beacon_interval = 60 * 60
         last_beacon     = 0
 
         self.log_info.emit(
-            f"Repeater mode: {callsign} - beacon every 60 minutes"
+            f"Repeater: {callsign} - beacon every 60 minutes"
         )
 
         while self.running:
             now = time.time()
 
-            # Hourly beacon - callsign and time only
             if now - last_beacon >= beacon_interval:
                 freq_mhz   = refresh_frequency()
-                utc_time   = get_utc_time()
                 local_time = get_local_time()
+                utc_time   = get_utc_time()
                 beacon     = (
-                    f"{callsign}. "
-                    f"{local_time['spoken']}, "
-                    f"{utc_time['spoken']}. "
+                    f"This is {callsign}, "
+                    f"{local_time['spoken']}. "
                     f"{callsign}"
                 )
                 transmit(beacon)
                 last_beacon = now
                 self.log_info.emit(
-                    f"Beacon sent: {callsign} - "
-                    f"{utc_time['time_utc']}Z"
+                    f"Beacon: {callsign} {utc_time['time_utc']}Z"
                 )
 
-            # Listen for queries
             if listen_for_signal(5):
                 heard = record_and_transcribe()
                 if heard:
+                    freq_mhz = refresh_frequency()
                     response     = brain.process_repeater_query(
                         heard, callsign
                     )
@@ -540,7 +526,13 @@ class RadioWorker(QThread):
                     if speech:
                         transmit(speech)
 
-                    # Log the contact
+                    self.repeater_contact.emit(
+                        caller or 'UNKNOWN',
+                        freq_mhz,
+                        request_type,
+                        heard
+                    )
+
                     try:
                         from adif.repeater_logger import log_repeater_contact
                         log_repeater_contact(
@@ -548,10 +540,6 @@ class RadioWorker(QThread):
                             request_type,
                             heard,
                             self.config
-                        )
-                        self.log_success.emit(
-                            f"Repeater contact: "
-                            f"{caller or 'unknown'} - {request_type}"
                         )
                     except Exception as e:
                         self.log_error.emit(f"Repeater log error: {e}")
@@ -562,9 +550,6 @@ class RadioWorker(QThread):
         self.running = False
 
 
-# ----------------------------------------------------------------------
-# Main application window
-# ----------------------------------------------------------------------
 class MainWindow(QMainWindow):
 
     def __init__(self, config, hamlib=None):
@@ -579,7 +564,7 @@ class MainWindow(QMainWindow):
             f"{self.config.get('operator_name','')}  |  "
             f"{self.config.get('qth','')}"
         )
-        self.setMinimumSize(960, 720)
+        self.setMinimumSize(980, 740)
 
         self._build_menu()
         self._build_ui()
@@ -621,6 +606,7 @@ class MainWindow(QMainWindow):
         root.setSpacing(6)
         root.setContentsMargins(8, 8, 8, 8)
 
+        # Control bar
         ctrl_group  = QGroupBox("Control")
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setSpacing(12)
@@ -651,9 +637,7 @@ class MainWindow(QMainWindow):
         ctrl_layout.addWidget(self.freq_label)
 
         self.radio_indicator = QLabel("●")
-        self.radio_indicator.setStyleSheet(
-            "color: #ff4444; font-size: 18px;"
-        )
+        self.radio_indicator.setStyleSheet("color: #ff4444; font-size: 18px;")
         self.radio_indicator.setToolTip("Radio connection status")
         ctrl_layout.addWidget(self.radio_indicator)
 
@@ -669,6 +653,7 @@ class MainWindow(QMainWindow):
         ctrl_group.setLayout(ctrl_layout)
         root.addWidget(ctrl_group)
 
+        # Splitter - activity log top, tabs bottom
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         log_group  = QGroupBox("Activity Log")
@@ -684,32 +669,41 @@ class MainWindow(QMainWindow):
         log_group.setLayout(log_layout)
         splitter.addWidget(log_group)
 
-        qso_group  = QGroupBox("QSO Log")
-        qso_layout = QVBoxLayout()
-        self.qso_log = QSOLogWidget()
-        qso_layout.addWidget(self.qso_log)
-        qso_group.setLayout(qso_layout)
-        splitter.addWidget(qso_group)
+        # Tabbed log panel
+        self.log_tabs = QTabWidget()
+        self.log_tabs.setStyleSheet("""
+            QTabBar::tab { 
+                background: #1a1a2a; 
+                color: #aaaaaa;
+                padding: 4px 12px;
+            }
+            QTabBar::tab:selected { 
+                background: #2a2a4a; 
+                color: #ffffff;
+            }
+        """)
 
+        self.qso_log = QSOLogWidget()
+        self.log_tabs.addTab(self.qso_log, "QSO Log")
+
+        self.repeater_log = RepeaterLogWidget()
+        self.log_tabs.addTab(self.repeater_log, "Repeater Log")
+
+        splitter.addWidget(self.log_tabs)
         splitter.setSizes([450, 220])
         root.addWidget(splitter)
 
     def _build_status_bar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage(
-            "Ready  —  Press Start to begin operating"
-        )
+        self.status_bar.showMessage("Ready  —  Press Start to begin operating")
 
     def _style_btn_start(self):
         self.start_btn.setStyleSheet("""
             QPushButton {
-                background-color: #2d7a2d;
-                color: white;
-                font-size: 13px;
-                font-weight: bold;
-                border-radius: 6px;
-                padding: 6px 16px;
+                background-color: #2d7a2d; color: white;
+                font-size: 13px; font-weight: bold;
+                border-radius: 6px; padding: 6px 16px;
             }
             QPushButton:hover   { background-color: #3d9a3d; }
             QPushButton:pressed { background-color: #1d5a1d; }
@@ -718,12 +712,9 @@ class MainWindow(QMainWindow):
     def _style_btn_stop(self):
         self.start_btn.setStyleSheet("""
             QPushButton {
-                background-color: #7a2d2d;
-                color: white;
-                font-size: 13px;
-                font-weight: bold;
-                border-radius: 6px;
-                padding: 6px 16px;
+                background-color: #7a2d2d; color: white;
+                font-size: 13px; font-weight: bold;
+                border-radius: 6px; padding: 6px 16px;
             }
             QPushButton:hover   { background-color: #9a3d3d; }
             QPushButton:pressed { background-color: #5a1d1d; }
@@ -746,6 +737,7 @@ class MainWindow(QMainWindow):
         self.worker.log_error.connect(self.activity_log.log_error)
         self.worker.log_warning.connect(self.activity_log.log_warning)
         self.worker.qso_logged.connect(self._handle_qso_logged)
+        self.worker.repeater_contact.connect(self._handle_repeater_contact)
         self.worker.status_msg.connect(self.status_bar.showMessage)
         self.worker.frequency.connect(
             lambda f: self.freq_label.setText(f"{f:.4f} MHz")
@@ -756,15 +748,11 @@ class MainWindow(QMainWindow):
         self.start_btn.setText("⏹   Stop Operating")
         self._style_btn_stop()
         self.personality_combo.setEnabled(False)
-        self.radio_indicator.setStyleSheet(
-            "color: #00ff00; font-size: 18px;"
-        )
+        self.radio_indicator.setStyleSheet("color: #00ff00; font-size: 18px;")
 
     def _stop_operation(self):
         if self.worker:
-            self.activity_log.log_info(
-                "Stopping - finishing current task..."
-            )
+            self.activity_log.log_info("Stopping...")
             self.worker.stop()
             self.worker.wait(5000)
         self._on_worker_finished()
@@ -773,12 +761,8 @@ class MainWindow(QMainWindow):
         self.start_btn.setText("▶   Start Operating")
         self._style_btn_start()
         self.personality_combo.setEnabled(True)
-        self.radio_indicator.setStyleSheet(
-            "color: #ff4444; font-size: 18px;"
-        )
-        self.status_bar.showMessage(
-            "Stopped  —  Press Start to begin operating"
-        )
+        self.radio_indicator.setStyleSheet("color: #ff4444; font-size: 18px;")
+        self.status_bar.showMessage("Stopped  —  Press Start to begin operating")
         self.activity_log.log_info("Operation stopped")
 
     def _handle_qso_logged(self, qso_data):
@@ -788,6 +772,10 @@ class MainWindow(QMainWindow):
             log_qso(qso_data, self.config)
         except Exception as e:
             self.activity_log.log_error(f"ADIF log error: {e}")
+
+    def _handle_repeater_contact(self, callsign, freq_mhz, request_type, heard):
+        self.repeater_log.add_contact(callsign, freq_mhz, request_type, heard)
+        self.log_tabs.setCurrentIndex(1)  # Switch to repeater tab
 
     def _poll_frequency(self):
         if self.worker and self.worker.isRunning():
@@ -829,18 +817,13 @@ class MainWindow(QMainWindow):
         if self.hamlib:
             self.activity_log.log_info("Restarting rigctld...")
             if self.hamlib.restart():
-                self.activity_log.log_success(
-                    "rigctld restarted successfully"
-                )
+                self.activity_log.log_success("rigctld restarted")
             else:
-                self.activity_log.log_error(
-                    "Failed to restart rigctld"
-                )
+                self.activity_log.log_error("Failed to restart rigctld")
 
     def _show_about(self):
         QMessageBox.about(
-            self,
-            "About Ham Radio AI",
+            self, "About Ham Radio AI",
             "Ham Radio AI  v1.0\n\n"
             "An AI-powered amateur radio operator\n"
             "Powered by Anthropic Claude\n\n"
