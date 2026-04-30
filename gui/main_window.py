@@ -56,11 +56,11 @@ class ActivityLog(QTextEdit):
 
 
 class QSOLogWidget(QTextEdit):
-    """QSO log table display"""
+    """Persistent QSO log table display"""
 
     HEADER = (
-        f"{'UTC':<7} {'CALLSIGN':<12} {'BAND':<6} "
-        f"{'RST S':<7} {'RST R':<7} {'NAME':<12} {'QTH':<18} {'SERIAL'}"
+        f"{'DATE':<9} {'UTC':<6} {'CALLSIGN':<12} {'BAND':<6} "
+        f"{'RST S':<7} {'RST R':<7} {'NAME':<12} {'QTH'}"
     )
 
     def __init__(self):
@@ -75,27 +75,84 @@ class QSOLogWidget(QTextEdit):
                 padding: 4px;
             }
         """)
+        self._write_header()
+
+    def _write_header(self):
         self.setTextColor(QColor('#4488ff'))
         self.append(self.HEADER)
         self.setTextColor(QColor('#333366'))
         self.append('-' * 80)
 
     def add_qso(self, qso_data):
+        """Add a single QSO row"""
         from datetime import datetime, timezone
-        time_str = datetime.now(timezone.utc).strftime('%H%MZ')
-        callsign = qso_data.get('callsign', '?')
-        band     = qso_data.get('band', '?')
-        rst_s    = qso_data.get('rst_sent', '59')
-        rst_r    = qso_data.get('rst_rcvd', '59')
-        name     = qso_data.get('name', '')
-        qth      = qso_data.get('qth', '')
-        serial   = qso_data.get('serial_sent', '')
+        now      = datetime.now(timezone.utc)
+        date_str = now.strftime('%d/%m/%y')
+        time_str = now.strftime('%H%MZ')
+        self._write_row(
+            date_str,
+            time_str,
+            qso_data.get('callsign', '?'),
+            qso_data.get('band', '?'),
+            qso_data.get('rst_sent', '59'),
+            qso_data.get('rst_rcvd', '59'),
+            qso_data.get('name', ''),
+            qso_data.get('qth', '')
+        )
+
+    def _write_row(
+        self, date, utc, callsign, band,
+        rst_s, rst_r, name, qth
+    ):
         self.setTextColor(QColor('#00ff88'))
         self.append(
-            f"{time_str:<7} {callsign:<12} {band:<6} "
-            f"{rst_s:<7} {rst_r:<7} {name:<12} {qth:<18} {serial}"
+            f"{date:<9} {utc:<6} {callsign:<12} {band:<6} "
+            f"{rst_s:<7} {rst_r:<7} {name:<12} {qth}"
         )
         self.moveCursor(QTextCursor.MoveOperation.End)
+
+    def load_from_adif(self):
+        """Load all existing QSOs from ADIF log on startup"""
+        try:
+            from adif.adif_logger import load_all_qsos
+            qsos = load_all_qsos()
+            if not qsos:
+                return
+
+            self.setTextColor(QColor('#555555'))
+            self.append(f"  --- {len(qsos)} previous QSOs loaded ---")
+
+            for q in qsos:
+                # Format date from YYYYMMDD to DD/MM/YY
+                raw_date = q.get('date', '')
+                try:
+                    date_str = (
+                        f"{raw_date[6:8]}/"
+                        f"{raw_date[4:6]}/"
+                        f"{raw_date[2:4]}"
+                    )
+                except Exception:
+                    date_str = raw_date
+
+                time_str = q.get('time', '') + 'Z'
+
+                self._write_row(
+                    date_str,
+                    time_str,
+                    q.get('callsign', '?'),
+                    q.get('band', '?'),
+                    q.get('rst_sent', '59'),
+                    q.get('rst_rcvd', '59'),
+                    q.get('name', ''),
+                    q.get('qth', '')
+                )
+
+            self.setTextColor(QColor('#333366'))
+            self.append('-' * 80)
+            self.moveCursor(QTextCursor.MoveOperation.End)
+
+        except Exception as e:
+            print(f"Could not load ADIF log: {e}")
 
 
 class RadioWorker(QThread):
@@ -147,7 +204,6 @@ class RadioWorker(QThread):
 
         os.environ['ANTHROPIC_API_KEY'] = self.config.get('api_key', '')
 
-        # Log exactly what audio devices we are using
         input_dev  = self.config.get('input_device')
         output_dev = self.config.get('output_device')
         self.log_info.emit(
@@ -161,7 +217,6 @@ class RadioWorker(QThread):
         self.radio = RadioControl()
         self.radio.connect()
 
-        # Create AudioHandler with devices from config
         audio = AudioHandler(
             input_device=input_dev,
             output_device=output_dev
@@ -193,7 +248,18 @@ class RadioWorker(QThread):
         self.log_success.emit("All systems ready!")
 
         # --------------------------------------------------------------
-        # Helper: transmit - PTT ALWAYS released via finally block
+        # Helper: refresh frequency from radio
+        # --------------------------------------------------------------
+        def refresh_frequency():
+            try:
+                f = self.radio.get_frequency() / 1e6
+                self.frequency.emit(f)
+                return f
+            except Exception:
+                return freq_mhz
+
+        # --------------------------------------------------------------
+        # Helper: transmit
         # --------------------------------------------------------------
         def transmit(text):
             self.log_tx.emit(text)
@@ -287,10 +353,10 @@ class RadioWorker(QThread):
         # --------------------------------------------------------------
         # Helper: finish and log a QSO
         # --------------------------------------------------------------
-        def finish_qso():
+        def finish_qso(current_freq_mhz):
             qso = brain.qso_data.copy()
-            qso['band']      = brain._get_band(freq_mhz)
-            qso['frequency'] = freq_mhz
+            qso['band']      = brain._get_band(current_freq_mhz)
+            qso['frequency'] = current_freq_mhz
             if qso.get('callsign'):
                 self.qso_logged.emit(qso)
                 self.log_success.emit(
@@ -310,19 +376,19 @@ class RadioWorker(QThread):
             self._run_general_qso(
                 brain, transmit, listen_for_signal,
                 record_and_transcribe, finish_qso,
-                freq_mhz, listen_timeout
+                refresh_frequency, freq_mhz, listen_timeout
             )
         elif self.personality == 'Contest':
             self._run_contest(
                 brain, transmit, listen_for_signal,
                 record_and_transcribe, finish_qso,
-                freq_mhz, listen_timeout
+                refresh_frequency, freq_mhz, listen_timeout
             )
         elif self.personality == 'Repeater':
             self._run_repeater(
                 brain, transmit, listen_for_signal,
                 record_and_transcribe,
-                freq_mhz, listen_timeout
+                refresh_frequency, freq_mhz, listen_timeout
             )
 
         self.radio.disconnect()
@@ -334,11 +400,13 @@ class RadioWorker(QThread):
     def _run_general_qso(
         self, brain, transmit, listen_for_signal,
         record_and_transcribe, finish_qso,
-        freq_mhz, listen_timeout
+        refresh_frequency, freq_mhz, listen_timeout
     ):
         cq_attempts = 0
 
         while self.running:
+            # Refresh frequency before each CQ
+            freq_mhz = refresh_frequency()
             brain.reset()
             self.log_info.emit("Generating CQ call...")
             result = brain.get_cq_call(freq_mhz)
@@ -367,7 +435,9 @@ class RadioWorker(QThread):
                     if response['action'] == 'log_and_end':
                         transmit(response['speech'])
 
-                    finish_qso()
+                    # Refresh frequency after QSO before logging
+                    freq_mhz = refresh_frequency()
+                    finish_qso(freq_mhz)
                     cq_attempts = 0
             else:
                 self.log_info.emit(
@@ -389,7 +459,7 @@ class RadioWorker(QThread):
     def _run_contest(
         self, brain, transmit, listen_for_signal,
         record_and_transcribe, finish_qso,
-        freq_mhz, listen_timeout
+        refresh_frequency, freq_mhz, listen_timeout
     ):
         serial       = 1
         contest_name = self.config.get('contest_name', 'Contest')
@@ -397,6 +467,7 @@ class RadioWorker(QThread):
         self.log_info.emit(f"Contest mode: {contest_name}")
 
         while self.running:
+            freq_mhz = refresh_frequency()
             brain.reset()
             cq_text = (
                 f"CQ {contest_name}, "
@@ -416,6 +487,7 @@ class RadioWorker(QThread):
                         response = brain.process_contest_exchange(
                             heard, serial
                         )
+                        freq_mhz = refresh_frequency()
                         qso = brain.qso_data.copy()
                         qso['band']        = brain._get_band(freq_mhz)
                         qso['frequency']   = freq_mhz
@@ -446,7 +518,7 @@ class RadioWorker(QThread):
     # ------------------------------------------------------------------
     def _run_repeater(
         self, brain, transmit, listen_for_signal,
-        record_and_transcribe,
+        record_and_transcribe, refresh_frequency,
         freq_mhz, listen_timeout
     ):
         from utils import get_utc_time, get_weather
@@ -467,8 +539,9 @@ class RadioWorker(QThread):
             now = time.time()
 
             if now - last_beacon >= beacon_interval:
+                freq_mhz  = refresh_frequency()
                 time_info = get_utc_time()
-                beacon = (
+                beacon    = (
                     f"This is {callsign}, the time is "
                     f"{time_info['spoken']}. Standing by for calls."
                 )
@@ -514,6 +587,10 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_status_bar()
 
+        # Load previous QSOs into log on startup
+        self.qso_log.load_from_adif()
+
+        # Poll frequency every 5 seconds when idle
         self.freq_timer = QTimer()
         self.freq_timer.timeout.connect(self._poll_frequency)
         self.freq_timer.start(5000)
@@ -534,8 +611,8 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        radio_menu      = menubar.addMenu('Radio')
-        restart_action  = QAction('Restart rigctld', self)
+        radio_menu     = menubar.addMenu('Radio')
+        restart_action = QAction('Restart rigctld', self)
         restart_action.triggered.connect(self._restart_rigctld)
         radio_menu.addAction(restart_action)
 
@@ -737,7 +814,7 @@ class MainWindow(QMainWindow):
             self.activity_log.log_error(f"ADIF log error: {e}")
 
     # ------------------------------------------------------------------
-    # Frequency polling
+    # Frequency polling when idle
     # ------------------------------------------------------------------
     def _poll_frequency(self):
         if self.worker and self.worker.isRunning():

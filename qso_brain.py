@@ -4,25 +4,39 @@ import json
 client = anthropic.Anthropic()
 
 SYSTEM_PROMPT = """You are an experienced amateur radio operator working for the club station MX0MXO 
-located in the United Kingdom. You are conducting SSB voice contacts on amateur radio bands.
+located in the United Kingdom. Your name is James and your QTH is London Heathrow.
 
-Your behaviour:
-- Follow correct amateur radio QSO procedure at all times
-- Always identify with MX0MXO when transmitting
-- Give signal reports in RS format for SSB (e.g. 59, 57, 55)
-- Be friendly but concise - radio contacts are brief
-- Always try to get the other station's callsign, signal report, name and QTH
-- End contacts politely with 73 (best regards)
-- Use phonetic alphabet when saying callsigns on air
+CALLSIGN RULES - CRITICAL:
+- When calling CQ: always use full phonetics for MX0MXO 
+  e.g. "Mike X-ray Zero Mike X-ray Oscar"
+- In ALL other transmissions: use letters only - just say "MX0MXO"
+- For other stations callsigns: use phonetics ONCE on first contact only,
+  then use letters only for the rest of the QSO
+  e.g. first time: "Golf Four Alpha Bravo Charlie" then after: "G4ABC"
+
+QSO STYLE:
+- Keep transmissions SHORT and PUNCHY - this is radio not a speech
+- One or two sentences maximum per transmission
+- Get the key info quickly: callsign, RST, name, QTH
+- Be friendly but efficient
+- Always end with "over" when expecting a reply
+- End QSO with "73, MX0MXO clear" or similar short farewell
+
+BEHAVIOUR:
+- Follow correct amateur radio QSO procedure
+- Give RST signal reports for SSB e.g. 59, 57, 55
+- Share your name (James) and QTH (London Heathrow) when appropriate
+- ALWAYS say 73 before ending any contact
+- When other station says 73, respond with a short 73 farewell THEN use log_and_end
+- Only use log_and_end AFTER you have transmitted your farewell
 
 CRITICAL RESPONSE FORMAT:
-You must ONLY respond with a single valid JSON object. 
-No other text before or after. No markdown. No code blocks. No explanations.
-Just raw JSON in exactly this format:
+Respond ONLY with a single valid JSON object.
+No text before or after. No markdown. No code blocks. Raw JSON only:
 
 {
   "action": "transmit",
-  "speech": "exactly what to say on air using phonetics for callsigns",
+  "speech": "what to say on air - SHORT and PUNCHY",
   "qso_data": {
     "callsign": null,
     "rst_sent": null,
@@ -33,10 +47,17 @@ Just raw JSON in exactly this format:
   }
 }
 
-Action must be one of:
-- "transmit" - you have something to say, speech will be spoken on air
-- "listen" - you are waiting for a reply, speech will be spoken then we listen
-- "log_and_end" - QSO is complete, log it and end"""
+action values:
+- "transmit" - say something then listen
+- "listen"   - say something then wait
+- "log_and_end" - QSO complete, farewell already sent, log it
+
+EXAMPLE QSO FLOW:
+CQ: "CQ CQ CQ this is Mike X-ray Zero Mike X-ray Oscar calling CQ, standing by"
+They reply: "G4ABC G4ABC this is MX0MXO, you are 59 here, go ahead"
+They send report: "G4ABC thanks, 59 here too, James in London Heathrow, MX0MXO over"
+They give details: "G4ABC thanks for the contact, 73, MX0MXO clear"
+log_and_end"""
 
 
 class QSOBrain:
@@ -46,11 +67,13 @@ class QSOBrain:
             'callsign': None,
             'rst_sent': None,
             'rst_rcvd': None,
-            'name': None,
-            'qth': None,
+            'name':     None,
+            'qth':      None,
             'complete': False
         }
-        self.our_callsign = 'MX0MXO'
+        self.our_callsign  = 'MX0MXO'
+        self.operator_name = 'James'
+        self.qth           = 'London Heathrow'
 
     def reset(self):
         """Reset for a new QSO"""
@@ -59,23 +82,21 @@ class QSOBrain:
             'callsign': None,
             'rst_sent': None,
             'rst_rcvd': None,
-            'name': None,
-            'qth': None,
+            'name':     None,
+            'qth':      None,
             'complete': False
         }
 
     def _call_claude(self, messages):
         """Make API call to Claude and return parsed result"""
         response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
+            model='claude-sonnet-4-6',
+            max_tokens=300,
             system=SYSTEM_PROMPT,
             messages=messages
         )
 
         raw = response.content[0].text.strip()
-
-        # Clean up any accidental markdown
         raw = raw.replace('```json', '').replace('```', '').strip()
 
         try:
@@ -87,17 +108,15 @@ class QSOBrain:
                     if value is not None:
                         self.qso_data[key] = value
 
-            # Always return the latest qso_data
             parsed['qso_data'] = self.qso_data.copy()
             return parsed
 
         except (json.JSONDecodeError, ValueError) as e:
             print(f"JSON parse error: {e}")
-            print(f"Raw response was: {raw}")
-            # Return a safe default
+            print(f"Raw response: {raw}")
             return {
-                'action': 'listen',
-                'speech': '',
+                'action':   'listen',
+                'speech':   '',
                 'qso_data': self.qso_data.copy()
             }
 
@@ -106,96 +125,125 @@ class QSOBrain:
         band = self._get_band(frequency_mhz)
 
         messages = [{
-            "role": "user",
-            "content": (
-                f"Generate a CQ call for {frequency_mhz:.4f} MHz on the {band} band. "
-                f"Call CQ 3 times maximum. End with MX0MXO over."
+            'role':    'user',
+            'content': (
+                f"Call CQ on {frequency_mhz:.4f} MHz ({band} band). "
+                f"Short CQ - maximum 2 CQ calls. End with MX0MXO over."
             )
         }]
 
         result = self._call_claude(messages)
-
-        # Add to conversation history
         self.conversation_history.append(messages[0])
         self.conversation_history.append({
-            "role": "assistant",
-            "content": json.dumps(result)
+            'role':    'assistant',
+            'content': json.dumps(result)
         })
-
         return result
 
     def process_received_transmission(self, transcribed_text):
-        """Process what was heard and generate a response"""
-
+        """Process received audio and generate a response"""
         self.conversation_history.append({
-            "role": "user",
-            "content": (
-                f"You just received this transmission on the radio (transcribed from audio): "
-                f"\"{transcribed_text}\"\n"
-                f"Current QSO data collected so far: {json.dumps(self.qso_data)}\n"
-                f"Respond appropriately. If you have callsign, rst_sent, rst_rcvd and the "
-                f"contact is wrapping up, use action log_and_end."
+            'role':    'user',
+            'content': (
+                f"Received: \"{transcribed_text}\"\n"
+                f"QSO data so far: {json.dumps(self.qso_data)}\n"
+                f"Respond - keep it short. "
+                f"Use log_and_end only after you have said 73."
             )
         })
 
         result = self._call_claude(self.conversation_history)
-
-        # Add response to history
         self.conversation_history.append({
-            "role": "assistant",
-            "content": json.dumps(result)
+            'role':    'assistant',
+            'content': json.dumps(result)
+        })
+        return result
+
+    def process_contest_exchange(self, transcribed_text, serial_number):
+        """Process a contest exchange"""
+        self.conversation_history.append({
+            'role':    'user',
+            'content': (
+                f"Contest received: \"{transcribed_text}\"\n"
+                f"Our serial number to send: {serial_number:03d}\n"
+                f"QSO data so far: {json.dumps(self.qso_data)}\n"
+                f"Fast contest exchange - get callsign, RST, serial. "
+                f"Use log_and_end when exchange complete."
+            )
         })
 
+        result = self._call_claude(self.conversation_history)
+        self.conversation_history.append({
+            'role':    'assistant',
+            'content': json.dumps(result)
+        })
+        return result
+
+    def process_repeater_query(self, transcribed_text, callsign):
+        """Process a query to the repeater/info node"""
+        from utils import get_utc_time, get_weather
+
+        time_info = get_utc_time()
+        weather   = get_weather()
+
+        messages = [{
+            'role':    'user',
+            'content': (
+                f"You are operating repeater/info node {callsign}.\n"
+                f"Received query: \"{transcribed_text}\"\n"
+                f"Current UTC time: {time_info['spoken']}\n"
+                f"Current weather: {weather['spoken']}\n"
+                f"Respond helpfully and briefly. "
+                f"Sign off with {callsign}."
+            )
+        }]
+
+        result = self._call_claude(messages)
         return result
 
     def _get_band(self, freq_mhz):
         """Identify amateur band from frequency"""
         bands = {
-            (1.8, 2.0): '160m',
-            (3.5, 4.0): '80m',
-            (7.0, 7.3): '40m',
-            (10.1, 10.15): '30m',
-            (14.0, 14.35): '20m',
-            (18.068, 18.168): '17m',
-            (21.0, 21.45): '15m',
-            (24.89, 24.99): '12m',
-            (28.0, 29.7): '10m',
-            (50.0, 52.0): '6m',
-            (144.0, 148.0): '2m',
-            (430.0, 440.0): '70cm',
+            (1.8,    2.0):   '160m',
+            (3.5,    4.0):   '80m',
+            (7.0,    7.3):   '40m',
+            (10.1,   10.15): '30m',
+            (14.0,   14.35): '20m',
+            (18.068, 18.168):'17m',
+            (21.0,   21.45): '15m',
+            (24.89,  24.99): '12m',
+            (28.0,   29.7):  '10m',
+            (50.0,   52.0):  '6m',
+            (144.0,  148.0): '2m',
+            (430.0,  440.0): '70cm',
         }
         for (low, high), band in bands.items():
             if low <= freq_mhz <= high:
                 return band
-        return 'unknown band'
+        return 'unknown'
 
 
-# Test it
+# Test
 if __name__ == '__main__':
     brain = QSOBrain()
 
-    print("Testing CQ call generation...")
-    freq = 144.300
-    result = brain.get_cq_call(freq)
-    print(f"Action : {result['action']}")
-    print(f"Speech : {result['speech']}")
-    print(f"QSO Data: {result['qso_data']}")
+    print("Testing CQ call...")
+    result = brain.get_cq_call(144.300)
+    print(f"Speech: {result['speech']}")
+    print(f"Action: {result['action']}")
 
-    print("\nTesting response to incoming call...")
+    print("\nTesting reply to incoming call...")
     brain.reset()
     result = brain.process_received_transmission(
-        "MX0MXO this is Golf Four Alpha Bravo Charlie calling you, "
-        "you are five nine here in London, my name is John. Over"
+        "MX0MXO this is G4ABC you are 59 name is John QTH Bristol over"
     )
-    print(f"Action : {result['action']}")
-    print(f"Speech : {result['speech']}")
-    print(f"QSO Data: {result['qso_data']}")
+    print(f"Speech: {result['speech']}")
+    print(f"Action: {result['action']}")
+    print(f"Data:   {result['qso_data']}")
 
-    print("\nTesting follow up exchange...")
+    print("\nTesting 73 handling...")
     result = brain.process_received_transmission(
-        "Thank you MX0MXO, you are also five nine here, "
-        "my QTH is London, thanks for the contact, 73"
+        "Thanks MX0MXO 73 and good DX"
     )
-    print(f"Action : {result['action']}")
-    print(f"Speech : {result['speech']}")
-    print(f"QSO Data: {result['qso_data']}")
+    print(f"Speech: {result['speech']}")
+    print(f"Action: {result['action']}")
