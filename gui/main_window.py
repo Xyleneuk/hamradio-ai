@@ -521,47 +521,74 @@ class RadioWorker(QThread):
         record_and_transcribe, refresh_frequency,
         freq_mhz, listen_timeout
     ):
-        from utils import get_utc_time, get_weather
+        from utils import get_utc_time, get_local_time
 
         callsign        = self.config.get(
             'repeater_callsign',
             self.config.get('callsign', 'NOCALL')
         )
-        beacon_interval = self.config.get('beacon_interval', 30) * 60
+        # Beacon every 60 minutes with just callsign and time
+        beacon_interval = 60 * 60
         last_beacon     = 0
 
         self.log_info.emit(
             f"Repeater mode: {callsign} - "
-            f"beacon every {self.config.get('beacon_interval', 30)} mins"
+            f"beacon every 60 minutes"
         )
 
         while self.running:
             now = time.time()
 
+            # Hourly beacon - callsign and time only
             if now - last_beacon >= beacon_interval:
                 freq_mhz  = refresh_frequency()
-                time_info = get_utc_time()
+                utc_time  = get_utc_time()
+                local_time = get_local_time()
                 beacon    = (
-                    f"This is {callsign}, the time is "
-                    f"{time_info['spoken']}. Standing by for calls."
+                    f"{callsign}, {local_time['spoken']}, "
+                    f"{utc_time['spoken']}, "
+                    f"{callsign}"
                 )
                 transmit(beacon)
                 last_beacon = now
-                self.log_info.emit(f"Beacon sent: {callsign}")
+                self.log_info.emit(
+                    f"Beacon sent: {callsign} - "
+                    f"{utc_time['time_utc']}Z"
+                )
 
+            # Listen for queries
             if listen_for_signal(5):
                 heard = record_and_transcribe()
                 if heard:
                     response = brain.process_repeater_query(
                         heard, callsign
                     )
-                    if response.get('speech'):
-                        transmit(response['speech'])
+                    speech       = response.get('speech', '')
+                    caller       = response.get('callsign')
+                    request_type = response.get('request_type', 'unknown')
+
+                    if speech:
+                        transmit(speech)
+
+                    # Log the contact
+                    try:
+                        from adif.repeater_logger import log_repeater_contact
+                        log_repeater_contact(
+                            caller or 'UNKNOWN',
+                            request_type,
+                            heard,
+                            self.config
+                        )
+                        self.log_success.emit(
+                            f"Repeater contact: "
+                            f"{caller or 'unknown'} - {request_type}"
+                        )
+                    except Exception as e:
+                        self.log_error.emit(
+                            f"Repeater log error: {e}"
+                        )
 
             time.sleep(0.5)
-
-    def stop(self):
-        self.running = False
 
 
 # ----------------------------------------------------------------------
