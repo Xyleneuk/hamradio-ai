@@ -359,6 +359,7 @@ class RadioWorker(QThread):
             finally:
                 try:
                     self.radio.set_ptt(0)
+                    time.sleep(0.8)
                 except Exception as e:
                     self.log_error.emit(f"CRITICAL: PTT release: {e}")
 
@@ -371,8 +372,8 @@ class RadioWorker(QThread):
                     return True
             return False
 
-        def record_transmission():
-            """Record until silence"""
+        def record_transmission(max_seconds=20):
+            """Record until silence, capped at max_seconds."""
             p      = pyaudio.PyAudio()
             stream = p.open(
                 format=pyaudio.paInt16,
@@ -382,12 +383,14 @@ class RadioWorker(QThread):
                 input_device_index=audio.input_device,
                 frames_per_buffer=1024
             )
-            recording     = []
-            silence_count = 0
-            frames_above  = 0
-            max_chunks    = int(8000 / 1024 * 45)
+            recording        = []
+            silence_count    = 0
+            frames_above     = 0
+            max_chunks       = int(8000 / 1024 * max_seconds)
+            # Give up if no real signal in first half of window (min 2s, max 3s)
+            no_signal_chunks = int(8000 / 1024 * min(3, max(2, max_seconds // 2)))
 
-            for _ in range(max_chunks):
+            for chunk_idx in range(max_chunks):
                 if not self.running:
                     break
                 data  = stream.read(1024, exception_on_overflow=False)
@@ -402,6 +405,8 @@ class RadioWorker(QThread):
                     silence_count += 1
                     if silence_count > silence_limit and frames_above > 5:
                         break
+                    if frames_above == 0 and chunk_idx >= no_signal_chunks:
+                        break
 
             stream.stop_stream()
             stream.close()
@@ -415,22 +420,31 @@ class RadioWorker(QThread):
             wf.close()
             return 'rx_audio.wav'
 
+        # Whisper echoes its initial_prompt on near-silence — catch and suppress
+        _WHISPER_JUNK = re.compile(
+            r'^[\s.,!?]*(?:ham\s+radio|callsign|rst|over|qrz|thanks\s+for\s+watching'
+            r'|thank\s+you\s+for\s+watching|please\s+subscribe|[\s.,!?]+)*[\s.,!?]*$',
+            re.IGNORECASE
+        )
+
         def transcribe_audio(audio_file):
-            """Transcribe with ham radio bias"""
+            """Transcribe speech to text."""
             result = transcriber.transcribe(
                 audio_file,
                 language='en',
                 fp16=False,
                 condition_on_previous_text=False,
                 compression_ratio_threshold=2.4,
-                initial_prompt="Ham radio. Callsign RST over."
             )
             text = _fix_callsigns(result['text'].strip())
-            self.log_rx.emit(text)
+            if _WHISPER_JUNK.fullmatch(text):
+                text = ''
+            if text:
+                self.log_rx.emit(text)
             return text
 
-        def record_and_transcribe():
-            record_transmission()
+        def record_and_transcribe(max_seconds=20):
+            record_transmission(max_seconds)
             return transcribe_audio('rx_audio.wav')
 
         def fast_respond(heard, brain_func, *args):
@@ -461,6 +475,7 @@ class RadioWorker(QThread):
             finally:
                 try:
                     self.radio.set_ptt(0)
+                    time.sleep(0.8)
                 except Exception as e:
                     self.log_error.emit(f"CRITICAL: PTT: {e}")
 
@@ -521,39 +536,11 @@ class RadioWorker(QThread):
             freq_mhz = refresh_frequency()
             brain.reset()
             self.log_info.emit("Calling CQ...")
-            result = brain.get_cq_call(freq_mhz)
-            transmit(result['speech'])
+            transmit(brain.get_cq_call(freq_mhz)['speech'])
             cq_attempts += 1
 
-            if listen_for_signal(listen_timeout):
-                heard = record_and_transcribe()
-                if heard:
-                    response = fast_respond(
-                        heard,
-                        brain.process_received_transmission
-                    )
-
-                    while self.running and response.get('action') != 'log_and_end':
-                        if listen_for_signal(listen_timeout):
-                            heard    = record_and_transcribe()
-                            response = fast_respond(
-                                heard,
-                                brain.process_received_transmission
-                            )
-                        else:
-                            self.log_warning.emit("No reply - ending QSO")
-                            break
-
-                    # Transmit farewell if log_and_end
-                    if response.get('action') == 'log_and_end':
-                        speech = response.get('speech', '')
-                        if speech and str(speech).strip().lower() != 'none':
-                            transmit(speech)
-
-                    freq_mhz = refresh_frequency()
-                    finish_qso(freq_mhz)
-                    cq_attempts = 0
-            else:
+            # --- Stage 1: short window, just need a callsign ---
+            if not listen_for_signal(listen_timeout):
                 self.log_info.emit(f"No reply ({cq_attempts}/3)")
                 if cq_attempts >= 3:
                     self.log_info.emit("Pausing 60s")
@@ -562,6 +549,75 @@ class RadioWorker(QThread):
                             break
                         time.sleep(1)
                     cq_attempts = 0
+                continue
+
+            heard = record_and_transcribe(5)
+            if not heard:
+                continue
+
+            brain._extract_qso_data(heard)
+            callsign = brain.qso_data.get('callsign')
+
+            if not callsign:
+                # Template retry — no Claude
+                transmit("Your callsign was not copied. Please say your callsign only. Over.")
+                if not listen_for_signal(listen_timeout):
+                    self.log_warning.emit("No callsign - returning to CQ")
+                    continue
+                heard = record_and_transcribe(5)
+                if heard:
+                    brain._extract_qso_data(heard)
+                callsign = brain.qso_data.get('callsign')
+                if not callsign:
+                    self.log_warning.emit("Could not identify callsign - returning to CQ")
+                    continue
+
+            # --- Stage 1b: confirmation loop — require explicit QSL or corrected callsign ---
+            confirmed_callsign = None
+            for _conf_attempt in range(2):
+                transmit(brain.build_confirmation_request(callsign)['speech'])
+
+                if not listen_for_signal(listen_timeout):
+                    break
+
+                conf_heard = record_and_transcribe(5)
+                confirmed_callsign = brain.parse_confirmation(conf_heard or '')
+
+                if confirmed_callsign:
+                    callsign = confirmed_callsign
+                    brain.qso_data['callsign'] = callsign
+                    self.log_info.emit(f"Callsign confirmed: {callsign}")
+                    break
+
+                self.log_warning.emit("Unclear confirmation — asking again")
+
+            if not confirmed_callsign:
+                self.log_warning.emit("Could not confirm callsign - returning to CQ")
+                cq_attempts = 0
+                continue
+
+            # --- Stage 2: give our RST, ask for theirs + name + QTH ---
+            transmit(brain.build_callsign_response(callsign)['speech'])
+
+            if not listen_for_signal(listen_timeout):
+                self.log_warning.emit("No RST received - ending QSO")
+                freq_mhz = refresh_frequency()
+                finish_qso(freq_mhz)
+                cq_attempts = 0
+                continue
+
+            heard = record_and_transcribe(15)
+            brain._extract_qso_data(heard)
+
+            callsign = brain.qso_data.get('callsign') or callsign or 'UNKNOWN'
+            rst_rcvd = brain.qso_data.get('rst_rcvd') or '59'
+
+            result = brain.build_farewell(callsign, rst_rcvd)
+            transmit(result['speech'])
+
+            freq_mhz = refresh_frequency()
+            finish_qso(freq_mhz)
+            cq_attempts = 0
 
     # ------------------------------------------------------------------
     # Contest
@@ -583,30 +639,7 @@ class RadioWorker(QThread):
             transmit(f"CQ {contest} MX0MXO MX0MXO")
             cq_attempts += 1
 
-            if listen_for_signal(listen_timeout):
-                heard = record_and_transcribe()
-                if heard:
-                    response = fast_respond(
-                        heard,
-                        brain.process_contest_exchange,
-                        serial
-                    )
-                    qso = brain.qso_data.copy()
-                    qso['band']        = brain._get_band(freq_mhz)
-                    qso['frequency']   = freq_mhz
-                    qso['serial_sent'] = f"{serial:03d}"
-
-                    if qso.get('callsign'):
-                        serial += 1
-                        self.qso_logged.emit(qso)
-                        self.log_success.emit(
-                            f"Contest #{serial-1}: {qso['callsign']}  "
-                            f"Sent:{qso['serial_sent']}  "
-                            f"Rcvd:{qso.get('serial_rcvd','?')}  "
-                            f"{freq_mhz:.4f} MHz"
-                        )
-                    cq_attempts = 0
-            else:
+            if not listen_for_signal(listen_timeout):
                 if cq_attempts >= 5:
                     self.log_info.emit("No responses - pausing 30s")
                     for _ in range(30):
@@ -614,6 +647,36 @@ class RadioWorker(QThread):
                             break
                         time.sleep(1)
                     cq_attempts = 0
+                continue
+
+            # Short recording — contest exchanges are callsign + serial only
+            heard = record_and_transcribe(8)
+            if not heard:
+                continue
+
+            brain._extract_qso_data(heard)
+            callsign = brain.qso_data.get('callsign')
+
+            if not callsign:
+                self.log_warning.emit("No callsign in contest exchange - ignoring")
+                continue
+
+            result = brain.build_contest_response(callsign, serial, heard)
+            transmit(result['speech'])
+
+            qso = brain.qso_data.copy()
+            qso['band']      = brain._get_band(freq_mhz)
+            qso['frequency'] = freq_mhz
+
+            serial += 1
+            self.qso_logged.emit(qso)
+            self.log_success.emit(
+                f"Contest #{serial-1}: {qso['callsign']}  "
+                f"Sent:{qso.get('serial_sent','?')}  "
+                f"Rcvd:{qso.get('serial_rcvd','?')}  "
+                f"{freq_mhz:.4f} MHz"
+            )
+            cq_attempts = 0
 
     # ------------------------------------------------------------------
     # Repeater
@@ -623,7 +686,7 @@ class RadioWorker(QThread):
         record_and_transcribe, refresh_frequency,
         freq_mhz, listen_timeout
     ):
-        from utils import get_utc_time, get_local_time
+        from utils import get_utc_time, get_local_time, get_weather, get_news
 
         callsign        = self.config.get(
             'repeater_callsign',
@@ -634,47 +697,84 @@ class RadioWorker(QThread):
 
         self.log_info.emit(f"Repeater: {callsign} - beacon every 60 mins")
 
+        cs_lower = callsign.lower()
+
+        def _repeater_response(heard):
+            """
+            Only respond to known keywords or direct address by our callsign.
+            Returns (None, None, 'ignored') for normal QSOs between other stations.
+            """
+            text = heard.lower()
+
+            weather_kw = ['weather', 'forecast', 'temperature', 'rain']
+            time_kw    = ['time', 'clock', 'hour']
+            news_kw    = ['news', 'headline', 'bbc']
+
+            has_weather = any(w in text for w in weather_kw)
+            has_time    = any(w in text for w in time_kw)
+            has_news    = any(w in text for w in news_kw)
+            addressed   = cs_lower in text
+
+            # Stay silent if not addressed and no keyword — don't interrupt QSOs
+            if not (has_weather or has_time or has_news or addressed):
+                return None, None, 'ignored'
+
+            if has_weather:
+                data         = get_weather()
+                speech       = f"This is {callsign}. {data['spoken']}."
+                request_type = 'weather'
+            elif has_time:
+                utc          = get_utc_time()
+                local        = get_local_time()
+                speech       = f"This is {callsign}. {utc['spoken']}, {local['spoken']}."
+                request_type = 'time'
+            elif has_news:
+                data         = get_news()
+                speech       = f"This is {callsign}. {data['spoken']}."
+                request_type = 'news'
+            else:
+                # Directly addressed but no specific keyword
+                speech       = f"This is {callsign}. Standing by."
+                request_type = 'general'
+
+            # Extract caller's callsign if present
+            brain._extract_qso_data(heard)
+            caller = brain.qso_data.get('callsign')
+            brain.reset()
+            return speech, caller, request_type
+
         while self.running:
             now = time.time()
 
             if now - last_beacon >= beacon_interval:
                 freq_mhz   = refresh_frequency()
-                local_time = get_local_time()
                 utc_time   = get_utc_time()
+                local_time = get_local_time()
                 transmit(
-                    f"This is {callsign}, "
-                    f"{local_time['spoken']}. "
-                    f"{callsign}"
+                    f"This is {callsign}, {local_time['spoken']}."
                 )
                 last_beacon = now
-                self.log_info.emit(
-                    f"Beacon: {callsign} {utc_time['time_utc']}Z"
-                )
+                self.log_info.emit(f"Beacon: {callsign} {utc_time['time_utc']}Z")
 
             if listen_for_signal(5):
-                heard = record_and_transcribe()
+                heard = record_and_transcribe(10)
                 if heard:
-                    freq_mhz     = refresh_frequency()
-                    response     = brain.process_repeater_query(
-                        heard, callsign
-                    )
-                    speech       = response.get('speech', '')
-                    caller       = response.get('callsign')
-                    request_type = response.get('request_type', 'unknown')
+                    freq_mhz              = refresh_frequency()
+                    speech, caller, rtype = _repeater_response(heard)
 
-                    if speech:
-                        transmit(speech)
+                    if rtype == 'ignored':
+                        self.log_info.emit("Repeater: QSO in progress, staying silent")
+                        continue
 
+                    transmit(speech)
                     self.repeater_contact.emit(
-                        caller or 'UNKNOWN', freq_mhz,
-                        request_type, heard
+                        caller or 'UNKNOWN', freq_mhz, rtype, heard
                     )
 
                     try:
                         from adif.repeater_logger import log_repeater_contact
                         log_repeater_contact(
-                            caller or 'UNKNOWN',
-                            request_type, heard, self.config
+                            caller or 'UNKNOWN', rtype, heard, self.config
                         )
                     except Exception as e:
                         self.log_error.emit(f"Repeater log error: {e}")
