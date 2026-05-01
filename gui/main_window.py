@@ -1056,7 +1056,7 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "About Ham Radio AI",
-            "Ham Radio AI  v1.0\n\n"
+            "Ham Radio AI  v1.2\n\n"
             "An AI-powered amateur radio operator\n"
             "Powered by Anthropic Claude\n\n"
             "Designed for the amateur radio community\n\n"

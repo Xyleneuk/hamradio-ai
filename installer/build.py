@@ -13,7 +13,7 @@ import sys
 import shutil
 
 APP_NAME    = 'HamRadioAI'
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.2.0'
 INNO_SETUP  = r'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 
 

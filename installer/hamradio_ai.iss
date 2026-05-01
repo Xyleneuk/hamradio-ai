@@ -2,7 +2,7 @@
 ; Download Inno Setup from https://jrsoftware.org/isdl.php
 
 #define AppName "Ham Radio AI"
-#define AppVersion "1.0.0"
+#define AppVersion "1.2.0"
 #define AppPublisher "HamRadioAI"
 #define AppURL "https://github.com/Xyleneuk/hamradio-ai"
 #define AppExeName "HamRadioAI.exe"
