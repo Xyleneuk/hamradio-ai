@@ -8,7 +8,7 @@ class TTSHandler:
         self.output_device = output_device_index
         
         # Set voice properties for radio-friendly speech
-        self.engine.setProperty('rate', 150)     # Words per minute - slightly slow for clarity
+        self.engine.setProperty('rate', 175)     # Words per minute - slightly slow for clarity
         self.engine.setProperty('volume', 1.0)   # Full volume
         
         # Try to find a good English voice
@@ -38,7 +38,7 @@ class TTSHandler:
         # Open file for writing
         stream.Open(filename, 3, False)  # 3 = SSFMCreateForWrite
         sapi.AudioOutputStream = stream
-        sapi.Rate = -2  # Slightly slower for clarity
+        sapi.Rate = 2   # Faster - range is -10 (slow) to 10 (fast)
         sapi.Speak(text)
         stream.Close()
         

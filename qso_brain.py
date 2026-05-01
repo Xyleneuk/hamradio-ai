@@ -11,16 +11,24 @@ CALLSIGN RULES:
 - All other TX: letters only "MX0MXO"
 - Other stations: phonetics first time only, then letters
 
-STYLE:
-- SHORT and PUNCHY - one sentence where possible
-- Get callsign, RST, name, QTH quickly
-- Say 73 before ending, then log_and_end
+QSO STYLE:
+- ONE sentence maximum per transmission
+- Get callsign and RST in first exchange - name/QTH is bonus
+- Ask for missing info ONCE only - never repeat questions
+- If callsign unclear after one ask - use best guess and continue
+- Say 73 and log_and_end after RST exchange
 - No need to repeat MX0MXO at end of every transmission
 
-RESPONSE FORMAT - raw JSON only:
+CALLSIGN HANDLING:
+- Accept any plausible callsign - G, M, 2E, F, DL, PA, G5 etc
+- Ask for confirmation ONCE only if completely unclear
+- Never ask more than once - use best guess if still unclear
+- Do not challenge callsigns - operators know their own callsign
+
+RESPONSE FORMAT - raw JSON only, no other text:
 {
   "action": "transmit",
-  "speech": "what to say",
+  "speech": "what to say - ONE sentence",
   "qso_data": {
     "callsign": null,
     "rst_sent": null,
@@ -33,21 +41,18 @@ RESPONSE FORMAT - raw JSON only:
 action: transmit | listen | log_and_end"""
 
 CONTEST_SYSTEM_PROMPT = """You are operating MX0MXO in a contest.
-Exchange: RST + serial number.
+Exchange: RST + serial number. Be extremely fast.
 
-RULES:
-- Extremely fast and brief
 - CQ: "CQ contest MX0MXO MX0MXO"
-- When they call with their exchange e.g. "59 023":
-  Reply MUST confirm THEIR serial and give OUR serial
-  Example: "G4ABC 59 023 confirmed, you are 59 102, MX0MXO"
+- On reply: confirm their serial, give ours, done
+- Example: "G4ABC 59 023 confirmed, you are 59 102, MX0MXO"
 - One transmission then log_and_end
 - Letters only except MX0MXO on CQ
 
-RESPONSE FORMAT - raw JSON only:
+Raw JSON only:
 {
   "action": "log_and_end",
-  "speech": "exactly what to say",
+  "speech": "what to say",
   "qso_data": {
     "callsign": null,
     "rst_sent": "59",
@@ -58,15 +63,14 @@ RESPONSE FORMAT - raw JSON only:
   }
 }"""
 
-REPEATER_SYSTEM_PROMPT = """You are automated repeater/info node. Callsign will be provided.
+REPEATER_SYSTEM_PROMPT = """You are automated repeater/info node.
 
-RULES:
-- Start with "This is [callsign]"
-- End with "[callsign]"  
-- Very short responses - this is radio
-- Use EXACT time/weather data provided - never guess
+- Start: "This is [callsign]"
+- End: "[callsign]"
+- Very short - one or two sentences max
+- Use EXACT time/weather provided - never guess
 
-RESPONSE FORMAT - raw JSON only:
+Raw JSON only:
 {
   "speech": "what to say",
   "callsign": "caller callsign or null",
@@ -100,15 +104,9 @@ class QSOBrain:
             'complete': False
         }
 
-    def _call_claude(self, messages, system=None):
-        response = client.messages.create(
-            model='claude-sonnet-4-6',
-            max_tokens=200,
-            system=system or SYSTEM_PROMPT,
-            messages=messages
-        )
-        raw = response.content[0].text.strip()
-        raw = raw.replace('```json', '').replace('```', '').strip()
+    def _parse(self, raw, system=None):
+        """Parse JSON response and update qso_data"""
+        raw = raw.strip().replace('```json', '').replace('```', '').strip()
         try:
             parsed = json.loads(raw)
             if 'qso_data' in parsed:
@@ -124,6 +122,29 @@ class QSOBrain:
                 'speech':   '',
                 'qso_data': self.qso_data.copy()
             }
+
+    def _call_claude(self, messages, system=None):
+        """Standard API call"""
+        response = client.messages.create(
+            model='claude-sonnet-4-6',
+            max_tokens=100,
+            system=system or SYSTEM_PROMPT,
+            messages=messages
+        )
+        return self._parse(response.content[0].text, system)
+
+    def _call_claude_streaming(self, messages, system=None):
+        """Streaming API call for faster response"""
+        full_text = ''
+        with client.messages.stream(
+            model='claude-sonnet-4-6',
+            max_tokens=100,
+            system=system or SYSTEM_PROMPT,
+            messages=messages
+        ) as stream:
+            for text in stream.text_stream:
+                full_text += text
+        return self._parse(full_text, system)
 
     def get_cq_call(self, frequency_mhz):
         band     = self._get_band(frequency_mhz)
@@ -146,11 +167,11 @@ class QSOBrain:
             'role':    'user',
             'content': (
                 f"Received: \"{transcribed_text}\"\n"
-                f"Data so far: {json.dumps(self.qso_data)}\n"
-                f"Keep it short. log_and_end only after saying 73."
+                f"Data: {json.dumps(self.qso_data)}\n"
+                f"One sentence reply. log_and_end after RST exchange."
             )
         })
-        result = self._call_claude(self.conversation_history)
+        result = self._call_claude_streaming(self.conversation_history)
         self.conversation_history.append({
             'role': 'assistant', 'content': json.dumps(result)
         })
@@ -161,12 +182,13 @@ class QSOBrain:
             'role':    'user',
             'content': (
                 f"Received: \"{transcribed_text}\"\n"
-                f"Our serial to send: {serial_number:03d}\n"
+                f"Our serial: {serial_number:03d}\n"
                 f"Confirm their serial, give ours, log_and_end."
             )
         }]
-        result = self._call_claude(messages, system=CONTEST_SYSTEM_PROMPT)
-        # Store serial numbers
+        result = self._call_claude_streaming(
+            messages, system=CONTEST_SYSTEM_PROMPT
+        )
         if 'qso_data' in result:
             result['qso_data']['serial_sent'] = f"{serial_number:03d}"
         return result
@@ -185,9 +207,9 @@ class QSOBrain:
 
         context = (
             f"You are repeater {callsign}\n"
-            f"Caller said: \"{transcribed_text}\"\n"
-            f"UTC time: {utc_time['spoken']}\n"
-            f"Local UK: {local_time['spoken']}\n"
+            f"Caller: \"{transcribed_text}\"\n"
+            f"UTC: {utc_time['spoken']}\n"
+            f"Local: {local_time['spoken']}\n"
             f"Weather: {weather['spoken']}\n"
         )
         if news_data:

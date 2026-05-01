@@ -9,6 +9,8 @@ datas += collect_data_files('whisper')
 datas += collect_data_files('anthropic')
 
 hiddenimports = [
+    'unittest',
+    'unittest.mock',	
     'anthropic',
     'sounddevice',
     'scipy',
@@ -47,7 +49,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['matplotlib', 'tkinter', 'unittest'],
+    excludes=['matplotlib', 'tkinter'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

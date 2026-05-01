@@ -2,8 +2,10 @@ import sys
 import os
 import wave
 import time
+import tempfile
 import numpy as np
 import pyaudio
+import re
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox,
@@ -11,6 +13,56 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QTextCursor, QAction
+
+
+def _fix_callsigns(text):
+    """Fix common Whisper callsign recognition errors"""
+    text = re.sub(r'\bMX0([A-Z]{2,3})\b', r'M0\1', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bMX\s+Zero\s+([A-Z]{2,3})\b', r'M0\1', text, flags=re.IGNORECASE)
+
+    phonetic_map = {
+        'alpha': 'A', 'bravo': 'B', 'charlie': 'C', 'delta': 'D',
+        'echo': 'E', 'foxtrot': 'F', 'golf': 'G', 'hotel': 'H',
+        'india': 'I', 'juliet': 'J', 'kilo': 'K', 'lima': 'L',
+        'mike': 'M', 'november': 'N', 'oscar': 'O', 'papa': 'P',
+        'quebec': 'Q', 'romeo': 'R', 'sierra': 'S', 'tango': 'T',
+        'uniform': 'U', 'victor': 'V', 'whiskey': 'W', 'xray': 'X',
+        'x-ray': 'X', 'yankee': 'Y', 'zulu': 'Z',
+        'zero': '0', 'one': '1', 'two': '2', 'three': '3',
+        'four': '4', 'five': '5', 'six': '6', 'seven': '7',
+        'eight': '8', 'nine': '9', 'niner': '9',
+    }
+
+    words  = text.split()
+    result = []
+    i      = 0
+    while i < len(words):
+        word = words[i].lower().rstrip('.,')
+        if word in phonetic_map:
+            callsign_parts = []
+            j = i
+            consecutive = 0
+            while j < len(words) and consecutive < 8:
+                w = words[j].lower().rstrip('.,')
+                if w in phonetic_map:
+                    callsign_parts.append(phonetic_map[w])
+                    consecutive += 1
+                    j += 1
+                elif w.isdigit():
+                    callsign_parts.append(w)
+                    consecutive += 1
+                    j += 1
+                else:
+                    break
+            candidate = ''.join(callsign_parts)
+            if (len(candidate) >= 4 and
+                    re.match(r'^[A-Z0-9]{1,3}\d[A-Z]{1,4}$', candidate)):
+                result.append(candidate)
+                i = j
+                continue
+        result.append(words[i])
+        i += 1
+    return ' '.join(result)
 
 
 class ActivityLog(QTextEdit):
@@ -97,13 +149,10 @@ class QSOLogWidget(QTextEdit):
         ser_r    = str(q.get('serial_rcvd') or '')
         name     = str(q.get('name')        or '')
         qth      = str(q.get('qth')         or '')
-
-        # Format frequency nicely
         try:
             freq = f"{float(freq):.4f}"
         except Exception:
             pass
-
         self.setTextColor(QColor('#00ff88'))
         self.append(
             f"{date:<9} {utc:<6} {callsign:<10} {band:<5} "
@@ -130,8 +179,7 @@ class QSOLogWidget(QTextEdit):
                     )
                 except Exception:
                     date_str = raw_date
-                time_str = q.get('time', '') + 'Z'
-                self._write_row(date_str, time_str, q)
+                self._write_row(date_str, q.get('time', '') + 'Z', q)
             self.setTextColor(QColor('#333366'))
             self.append('-' * 85)
             self.moveCursor(QTextCursor.MoveOperation.End)
@@ -167,14 +215,11 @@ class RepeaterLogWidget(QTextEdit):
         now      = datetime.now(timezone.utc)
         date_str = now.strftime('%d/%m/%y')
         time_str = now.strftime('%H%MZ')
-        callsign = str(callsign or 'UNKNOWN')
         freq     = f"{freq_mhz:.4f}" if freq_mhz else '?'
-        req      = str(request_type or 'unknown')
-        text     = str(heard or '')[:40]
         self.setTextColor(QColor('#88ff88'))
         self.append(
-            f"{date_str:<9} {time_str:<6} {callsign:<12} "
-            f"{freq:<10} {req:<10} {text}"
+            f"{date_str:<9} {time_str:<6} {str(callsign or 'UNKNOWN'):<12} "
+            f"{freq:<10} {str(request_type or ''):<10} {str(heard or '')[:40]}"
         )
         self.moveCursor(QTextCursor.MoveOperation.End)
 
@@ -187,7 +232,7 @@ class RadioWorker(QThread):
     log_error        = pyqtSignal(str)
     log_warning      = pyqtSignal(str)
     qso_logged       = pyqtSignal(dict)
-    repeater_contact = pyqtSignal(str, float, str, str)  # call, freq, type, heard
+    repeater_contact = pyqtSignal(str, float, str, str)
     status_msg       = pyqtSignal(str)
     frequency        = pyqtSignal(float)
 
@@ -228,12 +273,31 @@ class RadioWorker(QThread):
 
         input_dev  = self.config.get('input_device')
         output_dev = self.config.get('output_device')
-        self.log_info.emit(
-            f"Audio config: input={input_dev} output={output_dev}"
-        )
 
-        self.log_info.emit("Loading Whisper...")
-        transcriber = whisper.load_model('base')
+        # Load Whisper
+        whisper_model = self.config.get('whisper_model', 'medium')
+        self.log_info.emit(f"Loading Whisper ({whisper_model})...")
+        transcriber = whisper.load_model(whisper_model)
+
+        # Pre-warm Whisper - first inference is always slow
+        self.log_info.emit("Warming up speech recognition...")
+        try:
+            dummy = np.zeros(8000, dtype=np.int16)
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                dummy_path = f.name
+            wf = wave.open(dummy_path, 'wb')
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(8000)
+            wf.writeframes(dummy.tobytes())
+            wf.close()
+            transcriber.transcribe(
+                dummy_path, language='en', fp16=False,
+                condition_on_previous_text=False
+            )
+            os.unlink(dummy_path)
+        except Exception as e:
+            print(f"Whisper warmup error: {e}")
 
         self.log_info.emit("Connecting to radio...")
         self.radio = RadioControl()
@@ -251,8 +315,10 @@ class RadioWorker(QThread):
         brain.qth           = self.config.get('qth', '')
 
         threshold      = self.config.get('audio_threshold', 1500)
-        listen_timeout = self.config.get('listen_timeout', 15)
-        ptt_delay      = self.config.get('ptt_delay', 300) / 1000
+        listen_timeout = self.config.get('listen_timeout', 8)
+        ptt_delay      = self.config.get('ptt_delay', 100) / 1000
+        silence_ms     = self.config.get('silence_detect', 1000)
+        silence_limit  = int(8000 / 1024 * (silence_ms / 1000))
 
         freq     = self.radio.get_frequency()
         freq_mhz = freq / 1e6
@@ -262,6 +328,9 @@ class RadioWorker(QThread):
         )
         self.log_success.emit("All systems ready!")
 
+        # ------------------------------------------------------------------
+        # Helpers
+        # ------------------------------------------------------------------
         def refresh_frequency():
             try:
                 f = self.radio.get_frequency() / 1e6
@@ -271,6 +340,9 @@ class RadioWorker(QThread):
                 return freq_mhz
 
         def transmit(text):
+            """Transmit text - PTT always released"""
+            if not text or str(text).strip().lower() in ['', 'none']:
+                return
             self.log_tx.emit(text)
             try:
                 tts.speak_to_file(text, 'tx_audio.wav')
@@ -288,19 +360,19 @@ class RadioWorker(QThread):
                 try:
                     self.radio.set_ptt(0)
                 except Exception as e:
-                    self.log_error.emit(f"CRITICAL: PTT release failed: {e}")
+                    self.log_error.emit(f"CRITICAL: PTT release: {e}")
 
         def listen_for_signal(timeout):
             start = time.time()
             while time.time() - start < timeout:
                 if not self.running:
                     return False
-                level = audio.get_audio_level(0.5)
-                if level > threshold:
+                if audio.get_audio_level(0.5) > threshold:
                     return True
             return False
 
-        def record_and_transcribe():
+        def record_transmission():
+            """Record until silence"""
             p      = pyaudio.PyAudio()
             stream = p.open(
                 format=pyaudio.paInt16,
@@ -313,9 +385,7 @@ class RadioWorker(QThread):
             recording     = []
             silence_count = 0
             frames_above  = 0
-            # Reduced silence limit to 0.8s for faster response
-            silence_limit = int(8000 / 1024 * 0.8)
-            max_chunks    = int(8000 / 1024 * 30)
+            max_chunks    = int(8000 / 1024 * 45)
 
             for _ in range(max_chunks):
                 if not self.running:
@@ -343,13 +413,58 @@ class RadioWorker(QThread):
             wf.setframerate(8000)
             wf.writeframes(b''.join(recording))
             wf.close()
+            return 'rx_audio.wav'
 
+        def transcribe_audio(audio_file):
+            """Transcribe with ham radio bias"""
             result = transcriber.transcribe(
-                'rx_audio.wav', language='en', fp16=False
+                audio_file,
+                language='en',
+                fp16=False,
+                condition_on_previous_text=False,
+                compression_ratio_threshold=2.4,
+                initial_prompt="Ham radio. Callsign RST over."
             )
-            text = result['text'].strip()
+            text = _fix_callsigns(result['text'].strip())
             self.log_rx.emit(text)
             return text
+
+        def record_and_transcribe():
+            record_transmission()
+            return transcribe_audio('rx_audio.wav')
+
+        def fast_respond(heard, brain_func, *args):
+            """
+            Get Claude response via streaming then transmit immediately.
+            PTT always released.
+            """
+            response = brain_func(heard, *args)
+            speech   = response.get('speech', '')
+
+            if not speech or str(speech).strip().lower() in ['', 'none']:
+                return response
+
+            try:
+                tts.speak_to_file(speech, 'tx_audio.wav')
+            except Exception as e:
+                self.log_error.emit(f"TTS error: {e}")
+                return response
+
+            self.log_tx.emit(speech)
+            try:
+                self.radio.set_ptt(1)
+                time.sleep(ptt_delay)
+                audio.play('tx_audio.wav')
+                time.sleep(ptt_delay)
+            except Exception as e:
+                self.log_error.emit(f"Audio TX error: {e}")
+            finally:
+                try:
+                    self.radio.set_ptt(0)
+                except Exception as e:
+                    self.log_error.emit(f"CRITICAL: PTT: {e}")
+
+            return response
 
         def finish_qso(current_freq_mhz):
             qso = brain.qso_data.copy()
@@ -363,20 +478,23 @@ class RadioWorker(QThread):
                     f"{qso.get('rst_rcvd','?')}  "
                     f"{current_freq_mhz:.4f} MHz"
                 )
-            else:
-                self.log_warning.emit("QSO ended - no callsign captured")
 
+        # ------------------------------------------------------------------
+        # Run personality
+        # ------------------------------------------------------------------
         if self.personality == 'General QSO':
             self._run_general_qso(
-                brain, transmit, listen_for_signal,
-                record_and_transcribe, finish_qso,
-                refresh_frequency, freq_mhz, listen_timeout
+                brain, transmit, fast_respond,
+                listen_for_signal, record_and_transcribe,
+                finish_qso, refresh_frequency,
+                freq_mhz, listen_timeout
             )
         elif self.personality == 'Contest':
             self._run_contest(
-                brain, transmit, listen_for_signal,
-                record_and_transcribe, finish_qso,
-                refresh_frequency, freq_mhz, listen_timeout
+                brain, transmit, fast_respond,
+                listen_for_signal, record_and_transcribe,
+                finish_qso, refresh_frequency,
+                freq_mhz, listen_timeout
             )
         elif self.personality == 'Repeater':
             self._run_repeater(
@@ -388,16 +506,21 @@ class RadioWorker(QThread):
         self.radio.disconnect()
         audio.close()
 
+    # ------------------------------------------------------------------
+    # General QSO
+    # ------------------------------------------------------------------
     def _run_general_qso(
-        self, brain, transmit, listen_for_signal,
-        record_and_transcribe, finish_qso,
-        refresh_frequency, freq_mhz, listen_timeout
+        self, brain, transmit, fast_respond,
+        listen_for_signal, record_and_transcribe,
+        finish_qso, refresh_frequency,
+        freq_mhz, listen_timeout
     ):
         cq_attempts = 0
+
         while self.running:
             freq_mhz = refresh_frequency()
             brain.reset()
-            self.log_info.emit("Generating CQ...")
+            self.log_info.emit("Calling CQ...")
             result = brain.get_cq_call(freq_mhz)
             transmit(result['speech'])
             cq_attempts += 1
@@ -405,39 +528,54 @@ class RadioWorker(QThread):
             if listen_for_signal(listen_timeout):
                 heard = record_and_transcribe()
                 if heard:
-                    response = brain.process_received_transmission(heard)
-                    while self.running and response['action'] != 'log_and_end':
-                        transmit(response['speech'])
+                    response = fast_respond(
+                        heard,
+                        brain.process_received_transmission
+                    )
+
+                    while self.running and response.get('action') != 'log_and_end':
                         if listen_for_signal(listen_timeout):
                             heard    = record_and_transcribe()
-                            response = brain.process_received_transmission(heard)
+                            response = fast_respond(
+                                heard,
+                                brain.process_received_transmission
+                            )
                         else:
                             self.log_warning.emit("No reply - ending QSO")
                             break
-                    if response['action'] == 'log_and_end':
-                        transmit(response['speech'])
+
+                    # Transmit farewell if log_and_end
+                    if response.get('action') == 'log_and_end':
+                        speech = response.get('speech', '')
+                        if speech and str(speech).strip().lower() != 'none':
+                            transmit(speech)
+
                     freq_mhz = refresh_frequency()
                     finish_qso(freq_mhz)
                     cq_attempts = 0
             else:
                 self.log_info.emit(f"No reply ({cq_attempts}/3)")
                 if cq_attempts >= 3:
-                    self.log_info.emit("Pausing 60 seconds")
+                    self.log_info.emit("Pausing 60s")
                     for _ in range(60):
                         if not self.running:
                             break
                         time.sleep(1)
                     cq_attempts = 0
 
+    # ------------------------------------------------------------------
+    # Contest
+    # ------------------------------------------------------------------
     def _run_contest(
-        self, brain, transmit, listen_for_signal,
-        record_and_transcribe, finish_qso,
-        refresh_frequency, freq_mhz, listen_timeout
+        self, brain, transmit, fast_respond,
+        listen_for_signal, record_and_transcribe,
+        finish_qso, refresh_frequency,
+        freq_mhz, listen_timeout
     ):
         serial      = 1
         cq_attempts = 0
         contest     = self.config.get('contest_name', 'Contest')
-        self.log_info.emit(f"Contest: {contest} - starting serial {serial:03d}")
+        self.log_info.emit(f"Contest: {contest} - serial {serial:03d}")
 
         while self.running:
             freq_mhz = refresh_frequency()
@@ -448,9 +586,11 @@ class RadioWorker(QThread):
             if listen_for_signal(listen_timeout):
                 heard = record_and_transcribe()
                 if heard:
-                    response = brain.process_contest_exchange(heard, serial)
-                    transmit(response['speech'])
-
+                    response = fast_respond(
+                        heard,
+                        brain.process_contest_exchange,
+                        serial
+                    )
                     qso = brain.qso_data.copy()
                     qso['band']        = brain._get_band(freq_mhz)
                     qso['frequency']   = freq_mhz
@@ -460,8 +600,7 @@ class RadioWorker(QThread):
                         serial += 1
                         self.qso_logged.emit(qso)
                         self.log_success.emit(
-                            f"Contest QSO #{serial-1}: "
-                            f"{qso['callsign']}  "
+                            f"Contest #{serial-1}: {qso['callsign']}  "
                             f"Sent:{qso['serial_sent']}  "
                             f"Rcvd:{qso.get('serial_rcvd','?')}  "
                             f"{freq_mhz:.4f} MHz"
@@ -476,6 +615,9 @@ class RadioWorker(QThread):
                         time.sleep(1)
                     cq_attempts = 0
 
+    # ------------------------------------------------------------------
+    # Repeater
+    # ------------------------------------------------------------------
     def _run_repeater(
         self, brain, transmit, listen_for_signal,
         record_and_transcribe, refresh_frequency,
@@ -490,9 +632,7 @@ class RadioWorker(QThread):
         beacon_interval = 60 * 60
         last_beacon     = 0
 
-        self.log_info.emit(
-            f"Repeater: {callsign} - beacon every 60 minutes"
-        )
+        self.log_info.emit(f"Repeater: {callsign} - beacon every 60 mins")
 
         while self.running:
             now = time.time()
@@ -501,12 +641,11 @@ class RadioWorker(QThread):
                 freq_mhz   = refresh_frequency()
                 local_time = get_local_time()
                 utc_time   = get_utc_time()
-                beacon     = (
+                transmit(
                     f"This is {callsign}, "
                     f"{local_time['spoken']}. "
                     f"{callsign}"
                 )
-                transmit(beacon)
                 last_beacon = now
                 self.log_info.emit(
                     f"Beacon: {callsign} {utc_time['time_utc']}Z"
@@ -515,7 +654,7 @@ class RadioWorker(QThread):
             if listen_for_signal(5):
                 heard = record_and_transcribe()
                 if heard:
-                    freq_mhz = refresh_frequency()
+                    freq_mhz     = refresh_frequency()
                     response     = brain.process_repeater_query(
                         heard, callsign
                     )
@@ -527,19 +666,15 @@ class RadioWorker(QThread):
                         transmit(speech)
 
                     self.repeater_contact.emit(
-                        caller or 'UNKNOWN',
-                        freq_mhz,
-                        request_type,
-                        heard
+                        caller or 'UNKNOWN', freq_mhz,
+                        request_type, heard
                     )
 
                     try:
                         from adif.repeater_logger import log_repeater_contact
                         log_repeater_contact(
                             caller or 'UNKNOWN',
-                            request_type,
-                            heard,
-                            self.config
+                            request_type, heard, self.config
                         )
                     except Exception as e:
                         self.log_error.emit(f"Repeater log error: {e}")
@@ -550,6 +685,9 @@ class RadioWorker(QThread):
         self.running = False
 
 
+# ----------------------------------------------------------------------
+# Main Window
+# ----------------------------------------------------------------------
 class MainWindow(QMainWindow):
 
     def __init__(self, config, hamlib=None):
@@ -606,7 +744,6 @@ class MainWindow(QMainWindow):
         root.setSpacing(6)
         root.setContentsMargins(8, 8, 8, 8)
 
-        # Control bar
         ctrl_group  = QGroupBox("Control")
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setSpacing(12)
@@ -653,7 +790,6 @@ class MainWindow(QMainWindow):
         ctrl_group.setLayout(ctrl_layout)
         root.addWidget(ctrl_group)
 
-        # Splitter - activity log top, tabs bottom
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         log_group  = QGroupBox("Activity Log")
@@ -669,17 +805,13 @@ class MainWindow(QMainWindow):
         log_group.setLayout(log_layout)
         splitter.addWidget(log_group)
 
-        # Tabbed log panel
         self.log_tabs = QTabWidget()
         self.log_tabs.setStyleSheet("""
-            QTabBar::tab { 
-                background: #1a1a2a; 
-                color: #aaaaaa;
-                padding: 4px 12px;
+            QTabBar::tab {
+                background: #1a1a2a; color: #aaaaaa; padding: 4px 12px;
             }
-            QTabBar::tab:selected { 
-                background: #2a2a4a; 
-                color: #ffffff;
+            QTabBar::tab:selected {
+                background: #2a2a4a; color: #ffffff;
             }
         """)
 
@@ -775,7 +907,7 @@ class MainWindow(QMainWindow):
 
     def _handle_repeater_contact(self, callsign, freq_mhz, request_type, heard):
         self.repeater_log.add_contact(callsign, freq_mhz, request_type, heard)
-        self.log_tabs.setCurrentIndex(1)  # Switch to repeater tab
+        self.log_tabs.setCurrentIndex(1)
 
     def _poll_frequency(self):
         if self.worker and self.worker.isRunning():
