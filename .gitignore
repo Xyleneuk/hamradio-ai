@@ -1,6 +1,8 @@
-# Build outputs - too large for GitHub
 dist/
 build/
+installer/output/
 *.wav
 *.adi
-installer/output/
+*.raw
+__pycache__/
+*.pyc
