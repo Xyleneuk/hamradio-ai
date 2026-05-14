@@ -188,15 +188,19 @@ class RadioPage(QWizardPage):
         layout = QVBoxLayout()
         form   = QFormLayout()
 
+        # Map display name -> (hamlib model id, default CIV address)
+        self._model_info = {
+            "Icom IC-9700 (3081)":    ("3081", "0xA2"),
+            "Icom IC-7300 (3073)":    ("3073", "0x94"),
+            "Icom IC-7100 (3063)":    ("3063", "0x88"),
+            "Icom IC-705  (3085)":    ("3085", "0xA4"),
+            "Yaesu FT-991A (1045)":   ("1045", ""),
+            "Kenwood TS-590S (229)":  ("229",  ""),
+        }
+
         self.radio_model = QComboBox()
-        self.radio_model.addItems([
-            "Icom IC-9700 (3081)",
-            "Icom IC-7300 (3073)",
-            "Icom IC-7100 (3063)",
-            "Icom IC-705  (3085)",
-            "Yaesu FT-991A (1045)",
-            "Kenwood TS-590S (229)",
-        ])
+        self.radio_model.addItems(list(self._model_info.keys()))
+        self.radio_model.currentTextChanged.connect(self._on_model_changed)
         form.addRow("Radio Model", self.radio_model)
 
         port_layout = QHBoxLayout()
@@ -218,9 +222,11 @@ class RadioPage(QWizardPage):
         form.addRow("Baud Rate", self.baud_rate)
 
         self.civ_address = QLineEdit()
-        self.civ_address.setText("0xA2")
-        self.civ_address.setPlaceholderText("e.g. 0xA2 for IC-9700")
+        self.civ_address.setPlaceholderText("e.g. 0x94 for IC-7300")
         form.addRow("CI-V Address", self.civ_address)
+
+        # Set defaults for the initial selection
+        self._on_model_changed(self.radio_model.currentText())
 
         layout.addLayout(form)
 
@@ -233,6 +239,11 @@ class RadioPage(QWizardPage):
         layout.addWidget(self.status_label)
 
         self.setLayout(layout)
+
+    def _on_model_changed(self, text):
+        _, civ = self._model_info.get(text, ("", ""))
+        self.civ_address.setText(civ)
+        self.civ_address.setEnabled(bool(civ))
 
     def _refresh_ports(self):
         self.com_port.clear()
@@ -270,10 +281,8 @@ class RadioPage(QWizardPage):
             )
 
     def _get_model_number(self):
-        import re
-        text  = self.radio_model.currentText()
-        match = re.search(r'\((\d+)\)', text)
-        return match.group(1) if match else '3081'
+        model_id, _ = self._model_info.get(self.radio_model.currentText(), ("3081", ""))
+        return model_id
 
     def get_settings(self):
         port_data = self.com_port.currentData()
