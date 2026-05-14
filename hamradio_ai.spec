@@ -1,8 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
-import sys
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 
@@ -12,7 +11,7 @@ datas += collect_data_files('anthropic')
 
 hiddenimports = [
     'unittest',
-    'unittest.mock',	
+    'unittest.mock',
     'anthropic',
     'sounddevice',
     'scipy',
@@ -42,14 +41,10 @@ hiddenimports = [
     'subprocess',
 ]
 
-import sys
-python_dll_path = os.path.join(os.path.dirname(sys.executable), 'python311.dll')
-
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[
-        (python_dll_path, '.'),
         ('hamlib/bin/rigctld.exe', 'hamlib/bin'),
         ('hamlib/bin/libhamlib-4.dll', 'hamlib/bin'),
         ('hamlib/bin/libusb-1.0.dll', 'hamlib/bin'),
