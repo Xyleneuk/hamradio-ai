@@ -6,52 +6,49 @@ AI-powered voice interface for ham radio operations with real-time frequency tra
 
 ### Windows
 
-**Requirements:**
-- Python 3.11 or later
-- Git  
-- Visual Studio C++ Build Tools (for PyAudio compilation)
-- Hamlib (for radio control)
+**Quick Start (Easiest Method):**
 
-**Installation:**
+1. Install prerequisites:
+   - Python 3.11+ from https://www.python.org/ (check "Add Python to PATH")
+   - Git from https://git-scm.com/
+   - Hamlib from https://hamlib.sourceforge.io/ (hamlib-w64-4.7.1.exe)
+   - Visual Studio C++ Build Tools (https://visualstudio.microsoft.com/visual-cpp-build-tools/ - select "Desktop development with C++")
 
-1. **Install Visual Studio C++ Build Tools** (required for PyAudio)
-   - Download: https://visualstudio.microsoft.com/visual-cpp-build-tools/
-   - Run installer, select "Desktop development with C++"
-   - This is needed for compiling PyAudio from source
-
-2. **Install Python 3.11+**
-   - Download: https://www.python.org/
-   - ✅ Check "Add Python to PATH" during installation
-   - Verify: `python --version`
-
-3. **Install Hamlib**
-   - Download: https://hamlib.sourceforge.io/ (hamlib-w64-4.7.1.exe or later)
-   - Run installer, keep default settings
-   - Verify: Open Command Prompt and run `rigctld --version`
-
-4. **Clone and install dependencies**
+2. Clone the repo:
 ```powershell
 git clone https://github.com/Xyleneuk/hamradio-ai.git
 cd hamradio-ai
+```
+
+3. Run the installer (choose one):
+```powershell
+# Option A: Batch file (simplest)
+install.bat
+
+# Option B: PowerShell script
+powershell -ExecutionPolicy Bypass -File install.ps1
+
+# Option C: Manual installation
 pip install --upgrade pip wheel setuptools
 pip install -r requirements.txt
 ```
 
-5. **Run the app:**
+4. Run the app:
 ```powershell
 python main.py
 ```
 
-On first run, the setup wizard will ask for:
-- COM port (check Device Manager → Ports for your radio)
-- Baud rate (usually 9600 or 19200, check your radio manual)
-- Anthropic API key (get one at https://console.anthropic.com)
+**On First Run:**
+- Setup wizard will ask for COM port, baud rate, and API key
+- COM port: Check Device Manager → Ports (COM & LPT)
+- Baud rate: Check your radio manual (usually 9600 or 19200)
+- API key: Get from https://console.anthropic.com
 
 **Troubleshooting:**
-- If PyAudio install fails: Make sure Visual C++ Build Tools are installed
-- Check `~/hamradio_ai.log` for detailed diagnostics
-- Run as Administrator if radio connection fails (needed for COM port access)
-- Test radio: `python test_rigctld.py COM6 9600` (adjust port/baud as needed)
+- PyAudio fails: Install Visual Studio C++ Build Tools (required for compilation)
+- Radio connection fails: Run as Administrator (needed for COM port access)
+- Check logs: `~/hamradio_ai.log` has detailed diagnostics
+- Test radio: `python test_rigctld.py COM6 9600`
 
 ---
 
