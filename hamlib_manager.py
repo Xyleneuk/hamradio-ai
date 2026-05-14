@@ -3,6 +3,9 @@ import socket
 import time
 import os
 import sys
+import logging
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 if getattr(sys, 'frozen', False):
     # When running as a PyInstaller exe, use the extraction directory
@@ -32,21 +35,36 @@ class HamlibManager:
             sock.sendall(b'f\n')
             response = sock.recv(1024)
             sock.close()
+            logging.debug(f"rigctld is responding: {response.decode().strip()}")
             return True
-        except Exception:
+        except socket.timeout:
+            logging.debug(f"Connection timeout to port {RIGCTLD_PORT}")
+            return False
+        except ConnectionRefusedError:
+            logging.debug(f"Connection refused on port {RIGCTLD_PORT}")
+            return False
+        except Exception as e:
+            logging.debug(f"Error checking rigctld: {e}")
             return False
 
     def start(self):
         """Start rigctld as a background process"""
+        logging.info("=== Starting rigctld ===")
+
         if self.is_running():
-            print("rigctld already running")
+            logging.info("rigctld already running on port 4532")
             return True
 
+        logging.debug(f"Checking for rigctld executable...")
+        logging.debug(f"  Bundled: {BUNDLED_RIGCTLD} (exists: {os.path.exists(BUNDLED_RIGCTLD)})")
+        logging.debug(f"  System: {SYSTEM_RIGCTLD} (exists: {os.path.exists(SYSTEM_RIGCTLD)})")
+        logging.debug(f"  Using: {RIGCTLD_PATH}")
+
         if not os.path.exists(RIGCTLD_PATH):
-            print(f"rigctld not found")
-            print(f"  Checked: {BUNDLED_RIGCTLD}")
-            print(f"  Checked: {SYSTEM_RIGCTLD}")
-            print(f"Install hamlib from: https://hamlib.sourceforge.io/")
+            logging.error(f"rigctld not found at {RIGCTLD_PATH}")
+            logging.error(f"Checked bundled: {BUNDLED_RIGCTLD}")
+            logging.error(f"Checked system: {SYSTEM_RIGCTLD}")
+            logging.error(f"Install hamlib from: https://hamlib.sourceforge.io/")
             return False
 
         model       = self.config.get('radio_model', '3081')
@@ -63,26 +81,46 @@ class HamlibManager:
             '-t', str(RIGCTLD_PORT)
         ]
 
-        print(f"Starting rigctld: {' '.join(cmd)}")
+        logging.info(f"Command: {' '.join(cmd)}")
+        logging.info(f"Radio config: model={model}, port={com_port}, baud={baud_rate}, civ={civ_address}")
 
-        self.process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            logging.info(f"rigctld process started (PID: {self.process.pid})")
+        except Exception as e:
+            logging.error(f"Failed to start rigctld: {e}", exc_info=True)
+            return False
 
         # Wait up to 30 seconds for rigctld to be ready
-        print("Waiting for rigctld to initialise...")
+        logging.info("Waiting for rigctld to initialise...")
         for i in range(60):
             time.sleep(0.5)
-            if self.is_running():
-                print(f"rigctld ready after {(i+1)*0.5:.1f}s")
-                return True
-            if i % 4 == 0:  # Print every 2 seconds
-                print(f"  Still waiting... {i*0.5:.1f}s")
 
-        print("rigctld failed to start in time (timeout after 30s)")
+            # Check if process crashed
+            if self.process.poll() is not None:
+                stdout, stderr = self.process.communicate()
+                logging.error(f"rigctld exited with code {self.process.returncode}")
+                if stdout:
+                    logging.error(f"stdout: {stdout.decode()}")
+                if stderr:
+                    logging.error(f"stderr: {stderr.decode()}")
+                return False
+
+            if self.is_running():
+                logging.info(f"rigctld ready after {(i+1)*0.5:.1f}s")
+                return True
+
+            if i % 4 == 0:
+                logging.debug(f"Still waiting... {i*0.5:.1f}s")
+
+        logging.error("rigctld failed to start in time (timeout after 30s)")
+        if self.process:
+            self.process.terminate()
         return False
 
     def stop(self):
