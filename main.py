@@ -3,7 +3,7 @@ import os
 import logging
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from gui.main_window import MainWindow
-from gui.setup_wizard import load_config, run_wizard
+from gui.setup_wizard import load_config, run_wizard, save_config
 from hamlib_manager import HamlibManager
 
 # Set up logging to both console and file
@@ -42,6 +42,7 @@ def main():
             sys.exit(0)
         if config:
             config['setup_complete'] = True
+            save_config(config)
 
     logging.info(f"Config loaded: radio_model={config.get('radio_model')}, com_port={config.get('com_port')}, baud={config.get('baud_rate')}")
 
