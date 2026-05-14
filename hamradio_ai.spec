@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import sys
 from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
@@ -40,10 +42,20 @@ hiddenimports = [
     'subprocess',
 ]
 
+import sys
+python_dll_path = os.path.join(os.path.dirname(sys.executable), 'python311.dll')
+
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        (python_dll_path, '.'),
+        ('hamlib/bin/rigctld.exe', 'hamlib/bin'),
+        ('hamlib/bin/libhamlib-4.dll', 'hamlib/bin'),
+        ('hamlib/bin/libusb-1.0.dll', 'hamlib/bin'),
+        ('hamlib/bin/libgcc_s_seh-1.dll', 'hamlib/bin'),
+        ('hamlib/bin/libwinpthread-1.dll', 'hamlib/bin'),
+    ],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -51,7 +63,6 @@ a = Analysis(
     runtime_hooks=[],
     excludes=['matplotlib', 'tkinter'],
     win_no_prefer_redirects=False,
-    win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
