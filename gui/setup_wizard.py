@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import logging
 import pyaudio
 import serial.tools.list_ports
 from PyQt6.QtWidgets import (
@@ -11,24 +12,81 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
-CONFIG_FILE = os.path.join(
-    os.path.expanduser('~'), '.hamradio_ai', 'config.json'
-)
+# Try multiple config locations in order of preference
+def _get_config_file():
+    """Determine config file location with fallbacks"""
+    # First try: ~/.hamradio_ai/
+    primary = os.path.join(os.path.expanduser('~'), '.hamradio_ai', 'config.json')
+
+    # Fallback: AppData/Local (Windows standard)
+    try:
+        appdata = os.environ.get('APPDATA') or os.path.expanduser('~')
+        secondary = os.path.join(appdata, 'HamRadioAI', 'config.json')
+    except:
+        secondary = None
+
+    # Fallback: AppData/Local/Roaming
+    try:
+        localappdata = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+        tertiary = os.path.join(localappdata, 'HamRadioAI', 'config.json')
+    except:
+        tertiary = None
+
+    return primary, secondary, tertiary
+
+CONFIG_FILE = _get_config_file()[0]  # Default to primary
 
 
 def save_config(config):
-    """Save configuration to file"""
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
-    print(f"Config saved to {CONFIG_FILE}")
+    """Save configuration to file with fallback locations"""
+    primary, secondary, tertiary = _get_config_file()
+    locations_to_try = [primary, secondary, tertiary]
+
+    for config_file in locations_to_try:
+        if not config_file:
+            continue
+
+        config_dir = os.path.dirname(config_file)
+        logging.info(f"Attempting to save config to: {config_file}")
+
+        try:
+            os.makedirs(config_dir, exist_ok=True)
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            logging.info(f"Config saved successfully to {config_file}")
+            return config_file
+        except PermissionError as e:
+            logging.warning(f"Permission denied for {config_file}: {e}")
+            continue
+        except Exception as e:
+            logging.warning(f"Failed to save to {config_file}: {e}")
+            continue
+
+    # If all locations failed, raise error with all details
+    error_msg = f"Failed to save config to any location:\n"
+    for loc in locations_to_try:
+        if loc:
+            error_msg += f"  • {loc}\n"
+    logging.error(error_msg)
+    raise RuntimeError(error_msg)
 
 
 def load_config():
-    """Load configuration from file"""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
+    """Load configuration from file, checking all possible locations"""
+    primary, secondary, tertiary = _get_config_file()
+    locations_to_check = [primary, secondary, tertiary]
+
+    for config_file in locations_to_check:
+        if config_file and os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    logging.info(f"Loaded config from: {config_file}")
+                    return json.load(f)
+            except Exception as e:
+                logging.warning(f"Failed to load config from {config_file}: {e}")
+                continue
+
+    logging.debug("No config file found in any location")
     return None
 
 
