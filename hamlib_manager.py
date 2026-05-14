@@ -64,15 +64,17 @@ class HamlibManager:
             creationflags=subprocess.CREATE_NO_WINDOW
         )
 
-        # Wait up to 10 seconds for rigctld to be ready
+        # Wait up to 30 seconds for rigctld to be ready
         print("Waiting for rigctld to initialise...")
-        for i in range(20):
+        for i in range(60):
             time.sleep(0.5)
             if self.is_running():
                 print(f"rigctld ready after {(i+1)*0.5:.1f}s")
                 return True
+            if i % 4 == 0:  # Print every 2 seconds
+                print(f"  Still waiting... {i*0.5:.1f}s")
 
-        print("rigctld failed to start in time")
+        print("rigctld failed to start in time (timeout after 30s)")
         return False
 
     def stop(self):
