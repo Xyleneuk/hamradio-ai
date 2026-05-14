@@ -141,9 +141,16 @@ class RadioPage(QWizardPage):
         ])
         form.addRow("Radio Model", self.radio_model)
 
+        port_layout = QHBoxLayout()
         self.com_port = QComboBox()
+        self.com_port.setEditable(True)
         self._refresh_ports()
-        form.addRow("CAT COM Port", self.com_port)
+        port_layout.addWidget(self.com_port)
+        refresh_port_btn = QPushButton("Refresh")
+        refresh_port_btn.setMaximumWidth(80)
+        refresh_port_btn.clicked.connect(self._refresh_ports)
+        port_layout.addWidget(refresh_port_btn)
+        form.addRow("CAT COM Port", port_layout)
 
         self.baud_rate = QComboBox()
         self.baud_rate.addItems([
@@ -158,10 +165,6 @@ class RadioPage(QWizardPage):
         form.addRow("CI-V Address", self.civ_address)
 
         layout.addLayout(form)
-
-        refresh_btn = QPushButton("Refresh COM Ports")
-        refresh_btn.clicked.connect(self._refresh_ports)
-        layout.addWidget(refresh_btn)
 
         test_btn = QPushButton("Test Radio Connection")
         test_btn.clicked.connect(self._test_connection)

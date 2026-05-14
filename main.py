@@ -18,11 +18,13 @@ def main():
     # Load or create configuration
     # ----------------------------------------------------------------
     config = load_config()
-    if not config:
+    if not config or not config.get('setup_complete'):
         config = run_wizard()
         if not config:
             # User cancelled setup wizard - exit cleanly
             sys.exit(0)
+        if config:
+            config['setup_complete'] = True
 
     # ----------------------------------------------------------------
     # Set Anthropic API key from config
