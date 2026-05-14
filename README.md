@@ -8,39 +8,50 @@ AI-powered voice interface for ham radio operations with real-time frequency tra
 
 **Requirements:**
 - Python 3.11 or later
-- Git
+- Git  
+- Visual Studio C++ Build Tools (for PyAudio compilation)
 - Hamlib (for radio control)
 
 **Installation:**
 
-1. Install Python 3.11+ from https://www.python.org/
+1. **Install Visual Studio C++ Build Tools** (required for PyAudio)
+   - Download: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+   - Run installer, select "Desktop development with C++"
+   - This is needed for compiling PyAudio from source
+
+2. **Install Python 3.11+**
+   - Download: https://www.python.org/
    - ✅ Check "Add Python to PATH" during installation
+   - Verify: `python --version`
 
-2. Install Hamlib from https://hamlib.sourceforge.io/
-   - Download: `hamlib-w64-4.7.1.exe` (or later)
+3. **Install Hamlib**
+   - Download: https://hamlib.sourceforge.io/ (hamlib-w64-4.7.1.exe or later)
    - Run installer, keep default settings
+   - Verify: Open Command Prompt and run `rigctld --version`
 
-3. Clone and install:
+4. **Clone and install dependencies**
 ```powershell
 git clone https://github.com/Xyleneuk/hamradio-ai.git
 cd hamradio-ai
+pip install --upgrade pip wheel setuptools
 pip install -r requirements.txt
 ```
 
-4. Run:
+5. **Run the app:**
 ```powershell
 python main.py
 ```
 
 On first run, the setup wizard will ask for:
-- COM port (check Device Manager for your radio)
-- Baud rate (usually 9600 or 19200)
+- COM port (check Device Manager → Ports for your radio)
+- Baud rate (usually 9600 or 19200, check your radio manual)
 - Anthropic API key (get one at https://console.anthropic.com)
 
 **Troubleshooting:**
+- If PyAudio install fails: Make sure Visual C++ Build Tools are installed
 - Check `~/hamradio_ai.log` for detailed diagnostics
 - Run as Administrator if radio connection fails (needed for COM port access)
-- Test radio with: `python test_rigctld.py COM6 9600` (adjust port/baud)
+- Test radio: `python test_rigctld.py COM6 9600` (adjust port/baud as needed)
 
 ---
 
