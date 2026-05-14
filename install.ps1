@@ -33,15 +33,59 @@ if ($LASTEXITCODE -eq 0) {
 
 # Check Hamlib
 Write-Host "Checking Hamlib installation..."
+$hamlibFound = $false
+
+# Check if rigctld is in PATH
 $hamlibCheck = where.exe rigctld 2>&1
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "[OK] Hamlib found: $hamlibCheck"
-} else {
-    Write-Host "[WARNING] Hamlib not found in PATH"
-    Write-Host "Download from: https://hamlib.sourceforge.io/"
-    Write-Host "Install hamlib-w64-4.7.1.exe or later"
-    Write-Host ""
+    Write-Host "[OK] Hamlib found in PATH: $hamlibCheck"
+    $hamlibFound = $true
 }
+
+# Check default installation locations
+if (-not $hamlibFound) {
+    $defaultLocations = @(
+        "C:\Program Files\hamlib-w64-4.7.1\bin\rigctld.exe",
+        "C:\Program Files\hamlib\bin\rigctld.exe",
+        "C:\Program Files (x86)\hamlib\bin\rigctld.exe"
+    )
+
+    foreach ($location in $defaultLocations) {
+        if (Test-Path $location) {
+            Write-Host "[OK] Hamlib found at: $location"
+            $hamlibPath = Split-Path -Parent (Split-Path -Parent $location)
+            $binPath = Join-Path $hamlibPath "bin"
+            Write-Host "Adding to PATH: $binPath"
+
+            # Add to PATH for current session
+            $env:PATH = "$env:PATH;$binPath"
+
+            # Add to PATH permanently (requires admin)
+            try {
+                [Environment]::SetEnvironmentVariable("PATH", "$env:PATH;$binPath", "User")
+            } catch {
+                Write-Host "[NOTE] Could not update permanent PATH (not admin), but added to current session"
+            }
+
+            $hamlibFound = $true
+            break
+        }
+    }
+}
+
+if (-not $hamlibFound) {
+    Write-Host "[WARNING] Hamlib not found!"
+    Write-Host ""
+    Write-Host "Please install Hamlib:"
+    Write-Host "1. Download from: https://hamlib.sourceforge.io/"
+    Write-Host "2. Run hamlib-w64-4.7.1.exe installer"
+    Write-Host "3. Use default installation path"
+    Write-Host "4. Restart PowerShell after installation"
+    Write-Host ""
+} else {
+    Write-Host "[OK] Hamlib is ready"
+}
+Write-Host ""
 
 # Upgrade pip and install build tools
 Write-Host ""

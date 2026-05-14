@@ -32,14 +32,55 @@ echo [OK] Git found
 
 REM Check Hamlib
 echo Checking Hamlib installation...
+set HAMLIB_FOUND=0
+
+REM Check if rigctld is in PATH
 where rigctld >nul 2>&1
-if errorlevel 1 (
-    echo [WARNING] Hamlib not found in PATH
-    echo Download from: https://hamlib.sourceforge.io/
-    echo Install hamlib-w64-4.7.1.exe or later
-    pause
+if not errorlevel 1 (
+    set HAMLIB_FOUND=1
+    echo [OK] Hamlib found in PATH
+    goto HAMLIB_DONE
 )
-echo [OK] Hamlib check complete
+
+REM Check default installation locations
+if exist "C:\Program Files\hamlib-w64-4.7.1\bin\rigctld.exe" (
+    set HAMLIB_FOUND=1
+    echo [OK] Hamlib found at C:\Program Files\hamlib-w64-4.7.1\
+    echo Adding to PATH...
+    setx PATH "%PATH%;C:\Program Files\hamlib-w64-4.7.1\bin"
+    goto HAMLIB_DONE
+)
+
+if exist "C:\Program Files\hamlib\bin\rigctld.exe" (
+    set HAMLIB_FOUND=1
+    echo [OK] Hamlib found at C:\Program Files\hamlib\
+    echo Adding to PATH...
+    setx PATH "%PATH%;C:\Program Files\hamlib\bin"
+    goto HAMLIB_DONE
+)
+
+if exist "C:\Program Files (x86)\hamlib\bin\rigctld.exe" (
+    set HAMLIB_FOUND=1
+    echo [OK] Hamlib found at C:\Program Files (x86)\hamlib\
+    echo Adding to PATH...
+    setx PATH "%PATH%;C:\Program Files (x86)\hamlib\bin"
+    goto HAMLIB_DONE
+)
+
+:HAMLIB_DONE
+if %HAMLIB_FOUND%==0 (
+    echo [WARNING] Hamlib not found!
+    echo.
+    echo Please install Hamlib:
+    echo 1. Download from: https://hamlib.sourceforge.io/
+    echo 2. Run hamlib-w64-4.7.1.exe installer
+    echo 3. Use default installation path
+    echo 4. Restart this script after installation
+    echo.
+    pause
+) else (
+    echo [OK] Hamlib is ready
+)
 
 REM Upgrade pip and install build tools
 echo.
