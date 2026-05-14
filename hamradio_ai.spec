@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+import sys
+from PyInstaller.utils.hooks import collect_data_files
 
 block_cipher = None
 
@@ -41,16 +42,22 @@ hiddenimports = [
     'subprocess',
 ]
 
+# Get Python DLL path
+python_dll = os.path.join(os.path.dirname(sys.executable), 'python311.dll')
+binaries_list = [
+    ('hamlib/bin/rigctld.exe', 'hamlib/bin'),
+    ('hamlib/bin/libhamlib-4.dll', 'hamlib/bin'),
+    ('hamlib/bin/libusb-1.0.dll', 'hamlib/bin'),
+    ('hamlib/bin/libgcc_s_seh-1.dll', 'hamlib/bin'),
+    ('hamlib/bin/libwinpthread-1.dll', 'hamlib/bin'),
+]
+if os.path.exists(python_dll):
+    binaries_list.insert(0, (python_dll, '.'))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[
-        ('hamlib/bin/rigctld.exe', 'hamlib/bin'),
-        ('hamlib/bin/libhamlib-4.dll', 'hamlib/bin'),
-        ('hamlib/bin/libusb-1.0.dll', 'hamlib/bin'),
-        ('hamlib/bin/libgcc_s_seh-1.dll', 'hamlib/bin'),
-        ('hamlib/bin/libwinpthread-1.dll', 'hamlib/bin'),
-    ],
+    binaries=binaries_list,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -86,6 +93,9 @@ exe = EXE(
     icon='assets/icon.ico',
 )
 
+import shutil
+import sys
+
 coll = COLLECT(
     exe,
     a.binaries,
@@ -96,3 +106,18 @@ coll = COLLECT(
     upx_exclude=[],
     name='HamRadioAI',
 )
+
+# Post-build: Copy python311.dll to root folder for runtime access
+import shutil
+def post_build():
+    import os, sys
+    python_dll = os.path.join(os.path.dirname(sys.executable), 'python311.dll')
+    dist_root = os.path.join('dist', 'HamRadioAI', 'python311.dll')
+    if os.path.exists(python_dll):
+        try:
+            shutil.copy2(python_dll, dist_root)
+            print(f"[POST-BUILD] Copied python311.dll to {dist_root}")
+        except Exception as e:
+            print(f"[POST-BUILD] Warning: Could not copy python311.dll: {e}")
+
+post_build()
