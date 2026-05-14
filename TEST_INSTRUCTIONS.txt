@@ -1,0 +1,66 @@
+HOW TO TEST RADIO CONNECTION ON NEW LAPTOP
+============================================================
+
+WHAT YOU NEED:
+- test_radio.bat (this file)
+- test_rigctld.py
+- hamlib/ folder (with rigctld.exe inside)
+- Python 3.11+ installed
+
+QUICK START:
+============================================================
+
+1. Open Command Prompt (cmd.exe)
+
+2. Navigate to folder with these files:
+   cd C:\path\to\folder
+
+3. Run the test:
+   test_radio.bat COM7 9600
+
+   OR try different settings:
+   test_radio.bat COM7 19200
+   test_radio.bat COM6 9600
+
+EXPECTED OUTPUT:
+============================================================
+
+SUCCESS:
+  [OK] rigctld process started
+  [OK] Connected! Sending frequency query...
+  [OK] Got frequency: 7.1808 MHz
+  [SUCCESS] rigctld is working!
+
+FAILURE:
+  [FAIL] Could not connect to radio
+  Troubleshooting:
+   • Radio is powered ON?
+   • USB cable connected?
+   • Radio CI-V baud rate matches (19200 or 9600)?
+   • Radio CI-V address is 0xA2?
+   • No other software using COM port?
+
+NEXT STEPS:
+============================================================
+
+If SUCCESS:
+  → Radio is working, issue is in GUI connection
+  → Run HamRadioAI.exe again with same COM port/baud
+
+If FAILURE:
+  → Check radio power and USB cable
+  → Verify radio CI-V settings (MENU > SET > Connectors)
+  → Try different COM port (COM6, COM7, COM8, etc)
+  → Try different baud rate (9600, 19200)
+  → Check Device Manager for USB driver issues
+
+MANUAL COMMAND LINE:
+============================================================
+
+Instead of using test_radio.bat, you can run:
+
+  python test_rigctld.py COM7 9600
+
+Where:
+  COM7 = your COM port
+  9600 = baud rate (try 19200 if 9600 doesn't work)

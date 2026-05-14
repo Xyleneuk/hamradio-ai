@@ -5,11 +5,16 @@ import os
 import sys
 
 if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
+    # When running as a PyInstaller exe, use the extraction directory
+    BASE_DIR = sys._MEIPASS
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-RIGCTLD_PATH = os.path.join(BASE_DIR, 'hamlib', 'bin', 'rigctld.exe')
+# Try bundled version first, then system-wide installation
+BUNDLED_RIGCTLD = os.path.join(BASE_DIR, 'hamlib', 'bin', 'rigctld.exe')
+SYSTEM_RIGCTLD = r'C:\Program Files\hamlib-w64-4.7.1\bin\rigctld.exe'
+
+RIGCTLD_PATH = BUNDLED_RIGCTLD if os.path.exists(BUNDLED_RIGCTLD) else SYSTEM_RIGCTLD
 RIGCTLD_PORT = 4532
 
 
@@ -38,7 +43,10 @@ class HamlibManager:
             return True
 
         if not os.path.exists(RIGCTLD_PATH):
-            print(f"rigctld not found at {RIGCTLD_PATH}")
+            print(f"rigctld not found")
+            print(f"  Checked: {BUNDLED_RIGCTLD}")
+            print(f"  Checked: {SYSTEM_RIGCTLD}")
+            print(f"Install hamlib from: https://hamlib.sourceforge.io/")
             return False
 
         model       = self.config.get('radio_model', '3081')

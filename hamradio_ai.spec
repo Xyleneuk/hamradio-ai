@@ -6,7 +6,7 @@ hiddenimports = ['anthropic', 'sounddevice', 'scipy', 'pyaudio', 'whisper',
     'tiktoken', 'numpy', 'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore',
     'PyQt6.QtGui', 'win32com.client', 'pyttsx3', 'serial']
 
-a = Analysis(['main.py'], pathex=[], binaries=[('hamlib/bin/rigctld.exe', '.')],
+a = Analysis(['main.py'], pathex=[], binaries=[(r'hamlib\bin', 'hamlib\bin')],
     datas=datas, hiddenimports=hiddenimports, hookspath=[], runtime_hooks=[],
     excludes=['matplotlib', 'tkinter'], win_no_prefer_redirects=False,
     cipher=None, noarchive=False)
