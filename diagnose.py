@@ -7,7 +7,17 @@ import subprocess
 import os
 import sys
 
-RIGCTLD_PATH = r"C:\Users\james\.claude\projects\hamradio-ai\hamlib\bin\rigctld.exe"
+# Find rigctld: bundled first, then common installation paths
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_CANDIDATES = [
+    os.path.join(_BASE_DIR, 'hamlib', 'bin', 'rigctld.exe'),
+    r'C:\Program Files\hamlib-w64-4.7.1\bin\rigctld.exe',
+    r'C:\Program Files\hamlib-w64-4.6\bin\rigctld.exe',
+    r'C:\Program Files\hamlib-w64-4.5\bin\rigctld.exe',
+    r'C:\Program Files\hamlib\bin\rigctld.exe',
+    r'C:\Program Files (x86)\hamlib\bin\rigctld.exe',
+]
+RIGCTLD_PATH = next((p for p in _CANDIDATES if os.path.exists(p)), None)
 
 print("=" * 60)
 print("IC-7300 Diagnostic Check")
@@ -15,10 +25,11 @@ print("=" * 60)
 
 # Check if rigctld exists
 print("\n1. Checking rigctld executable...")
-if os.path.exists(RIGCTLD_PATH):
+if RIGCTLD_PATH:
     print(f"[OK] rigctld found at: {RIGCTLD_PATH}")
 else:
-    print(f"[ERROR] rigctld NOT found at: {RIGCTLD_PATH}")
+    print("[ERROR] rigctld not found in any known location.")
+    print("Install Hamlib from https://hamlib.sourceforge.io/")
     sys.exit(1)
 
 # Try to run rigctld with error output
@@ -65,8 +76,8 @@ except Exception as e:
 print("-" * 60)
 print("\nTroubleshooting checklist:")
 print("  [ ] Radio is powered ON")
-print("  [ ] USB cable is connected to COM6")
-print("  [ ] Verify COM6 in Device Manager (Ports > look for ICOM)")
+print("  [ ] USB cable is connected")
+print("  [ ] Verify COM port in Device Manager (Ports > look for ICOM)")
 print("  [ ] Radio menu: Connectors > CI-V Baud Rate = 19200")
 print("  [ ] Radio menu: Connectors > CI-V Address = A2")
 print("  [ ] Radio menu: Connectors > CI-V Echo Back = ON")

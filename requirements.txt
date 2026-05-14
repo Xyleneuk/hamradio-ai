@@ -10,3 +10,4 @@ sounddevice>=0.4.6
 requests>=2.31.0
 openai-whisper>=20231117
 wheel>=0.41.0
+pywin32>=228
