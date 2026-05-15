@@ -24,7 +24,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     app.setApplicationName('Ham Radio AI')
-    app.setApplicationVersion('1.0')
+    app.setApplicationVersion('3.0')
     app.setOrganizationName('HamRadioAI')
     app.setOrganizationDomain('hamradioai.co.uk')
     logging.info("Qt application initialized")
