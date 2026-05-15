@@ -70,16 +70,17 @@ class HamlibManager:
         model       = self.config.get('radio_model', '3081')
         com_port    = self.config.get('com_port', 'COM5')
         baud_rate   = self.config.get('baud_rate', '19200')
-        civ_address = self.config.get('civ_address', '0xA2')
+        civ_address = self.config.get('civ_address', '')
 
         cmd = [
             RIGCTLD_PATH,
             '-m', model,
             '-r', com_port,
             '-s', baud_rate,
-            '-C', f'civ_address={civ_address}',
             '-t', str(RIGCTLD_PORT)
         ]
+        if civ_address:
+            cmd += ['-C', f'civaddr={civ_address}']
 
         logging.info(f"Command: {' '.join(cmd)}")
         logging.info(f"Radio config: model={model}, port={com_port}, baud={baud_rate}, civ={civ_address}")
