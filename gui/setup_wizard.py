@@ -51,7 +51,7 @@ def save_config(config):
 
         try:
             os.makedirs(config_dir, exist_ok=True)
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2)
             logging.info(f"Config saved successfully to {config_file}")
             return config_file
@@ -79,7 +79,7 @@ def load_config():
     for config_file in locations_to_check:
         if config_file and os.path.exists(config_file):
             try:
-                with open(config_file, 'r') as f:
+                with open(config_file, 'r', encoding='utf-8-sig') as f:
                     logging.info(f"Loaded config from: {config_file}")
                     return json.load(f)
             except Exception as e:
